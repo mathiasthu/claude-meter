@@ -1,0 +1,32 @@
+#!/bin/bash
+# claude-meter SessionEnd hook.
+#
+# Removes the session's published snapshot the moment its Claude Code session
+# closes. Without this the menubar app can only fall back on file mtime, which
+# cannot tell "session closed" apart from "session sitting idle" -- the status
+# line stops firing in both cases, so a closed session would keep showing a
+# frozen percentage for up to an hour.
+#
+# Claude Code pipes hook JSON on stdin; session_id also arrives in the
+# environment on newer versions, so both are tried.
+
+set -u
+
+JQ=/usr/bin/jq
+STATE="${CLAUDE_METER_STATE:-$HOME/.local/state/claude-meter}"
+SESSIONS="$STATE/sessions"
+
+input=$(cat 2>/dev/null)
+
+sid=""
+if [ -n "$input" ] && [ -x "$JQ" ]; then
+  sid=$(printf '%s' "$input" | "$JQ" -r '.session_id // empty' 2>/dev/null)
+fi
+[ -n "$sid" ] || sid="${CLAUDE_SESSION_ID:-}"
+
+case "$sid" in
+  ''|*/*|*..*) exit 0 ;;
+esac
+
+rm -f "$SESSIONS/$sid.json" 2>/dev/null
+exit 0

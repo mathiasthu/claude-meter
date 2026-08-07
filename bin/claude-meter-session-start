@@ -1,0 +1,46 @@
+#!/bin/bash
+# claude-meter SessionStart hook -- self-heals the status line chain.
+#
+# The statusLine slot in ~/.claude/settings.json belongs to the kickbacks ad
+# script, which rewrites it. Rather than fight that, claude-meter hangs off the
+# chain hook kickbacks provides: it runs whatever command is named in
+# ~/.kickbacks/cli-prev-statusline.json and stacks that output below the ad.
+#
+# That file is also written by the kickbacks installer, which has clobbered it
+# before (see cli-prev-statusline.json.bak-175531). If it disappears or stops
+# pointing at the collector, the HUD silently vanishes and the menubar app
+# quietly goes stale -- a failure with no error anywhere. So re-assert it on
+# every session start.
+#
+# Only ever rewrites when the file is missing or points somewhere else, and
+# backs up whatever was there first.
+
+set -u
+
+JQ=/usr/bin/jq
+CHAIN="$HOME/.kickbacks/cli-prev-statusline.json"
+COLLECT="${CLAUDE_METER_COLLECT:-$HOME/claude-meter/bin/claude-meter-collect}"
+
+# No kickbacks installed: nothing to chain off, and creating the file would be
+# meaningless. A plain statusLine setup does not need this hook at all.
+[ -d "$HOME/.kickbacks" ] || exit 0
+[ -x "$COLLECT" ] || exit 0
+
+current=""
+if [ -f "$CHAIN" ] && [ -x "$JQ" ]; then
+  current=$("$JQ" -r '.statusLine.command // empty' "$CHAIN" 2>/dev/null)
+fi
+
+[ "$current" = "$COLLECT" ] && exit 0
+
+# Preserve whatever was displaced -- if this ever fires against a status line
+# the user actually wanted, the old command is still recoverable.
+if [ -f "$CHAIN" ]; then
+  cp -f "$CHAIN" "$CHAIN.claude-meter-bak" 2>/dev/null
+fi
+
+tmp="$CHAIN.tmp.$$"
+if printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$COLLECT" > "$tmp" 2>/dev/null; then
+  mv -f "$tmp" "$CHAIN" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+fi
+exit 0

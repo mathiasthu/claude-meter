@@ -1,0 +1,184 @@
+#!/bin/bash
+# claude-meter collector.
+#
+# Runs as a Claude Code statusLine command. Claude Code pipes the session JSON
+# to stdin; this script does two things with it:
+#
+#   1. Publishes a per-session snapshot to the state directory, so surfaces
+#      outside Claude Code (the ClaudeMeter menubar app) can read usage without
+#      a live session of their own. This is the only channel that exists --
+#      rate_limits are delivered to the status line and nowhere else.
+#   2. Prints a one-line HUD to stdout, which Claude Code renders.
+#
+# It is invoked indirectly: the kickbacks ad status line owns the statusLine
+# slot in settings.json and chains to whatever is named in
+# ~/.kickbacks/cli-prev-statusline.json, spawning it with stdin inherited. That
+# chain has a 3s deadline and a 64KB stdout cap, both of which this stays far
+# inside.
+#
+# Failure policy: never break the status line. Every path exits 0, and a
+# missing field degrades the HUD rather than aborting it.
+
+set -u
+
+JQ=/usr/bin/jq
+STATE="${CLAUDE_METER_STATE:-$HOME/.local/state/claude-meter}"
+SESSIONS="$STATE/sessions"
+MAX_AGE_MIN=1440
+
+input=$(cat)
+
+# No jq, or nothing on stdin: print nothing and get out of the way.
+[ -x "$JQ" ] || exit 0
+[ -n "$input" ] || exit 0
+
+mkdir -p "$SESSIONS" 2>/dev/null || exit 0
+
+# Keep the last raw payload. Claude Code's status line schema gains fields
+# between releases (rate_limits carries undocumented windows in 2.1.224), so
+# having the real thing on disk beats guessing from the docs.
+printf '%s' "$input" > "$STATE/last-raw.json.tmp.$$" 2>/dev/null &&
+  mv -f "$STATE/last-raw.json.tmp.$$" "$STATE/last-raw.json" 2>/dev/null
+rm -f "$STATE/last-raw.json.tmp.$$" 2>/dev/null
+
+now=$(date +%s)
+
+# Normalize into a stable shape. rate_limits is passed through whole rather
+# than picked apart: the CLI spreads its raw object, so it carries windows
+# beyond the two documented ones and we want them preserved for the app.
+snapshot=$(printf '%s' "$input" | "$JQ" -c --argjson ts "$now" '
+{
+  ts: $ts,
+  session_id:   (.session_id // "unknown"),
+  session_name: (.session_name // null),
+  cwd:          (.workspace.current_dir // .cwd // null),
+  project_dir:  (.workspace.project_dir // null),
+  model:        (.model.display_name // null),
+  model_id:     (.model.id // null),
+  version:      (.version // null),
+  effort:       (.effort.level // null),
+  fast_mode:    (.fast_mode // false),
+  context: {
+    used_percentage:      (.context_window.used_percentage // null),
+    remaining_percentage: (.context_window.remaining_percentage // null),
+    total_input_tokens:   (.context_window.total_input_tokens // 0),
+    total_output_tokens:  (.context_window.total_output_tokens // 0),
+    size:                 (.context_window.context_window_size // null),
+    current_usage:        (.context_window.current_usage // null)
+  },
+  exceeds_200k: (.exceeds_200k_tokens // false),
+  cost: {
+    total_cost_usd:        (.cost.total_cost_usd // 0),
+    total_duration_ms:     (.cost.total_duration_ms // 0),
+    total_api_duration_ms: (.cost.total_api_duration_ms // 0),
+    lines_added:           (.cost.total_lines_added // 0),
+    lines_removed:         (.cost.total_lines_removed // 0)
+  },
+  rate_limits: (.rate_limits // null)
+}' 2>/dev/null)
+
+# Malformed JSON on stdin: nothing useful to publish or print.
+[ -n "$snapshot" ] || exit 0
+
+sid=$(printf '%s' "$snapshot" | "$JQ" -r '.session_id' 2>/dev/null)
+# Session ids are UUIDs, but this becomes a filename -- refuse anything that
+# is not already path-safe rather than sanitizing a surprise into place.
+case "$sid" in
+  ''|*/*|*..*) sid="unknown" ;;
+esac
+
+tmp="$SESSIONS/.$sid.json.tmp.$$"
+if printf '%s\n' "$snapshot" > "$tmp" 2>/dev/null; then
+  # rename() is atomic on APFS, so the app never observes a half-written file.
+  mv -f "$tmp" "$SESSIONS/$sid.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+fi
+
+# Sweep snapshots left behind by sessions that died without a SessionEnd hook.
+find "$SESSIONS" -type f -name '*.json' -mmin +"$MAX_AGE_MIN" -delete 2>/dev/null
+
+# ---------------------------------------------------------------- HUD line --
+
+# Tab-separated so empty fields survive the split. "-" marks absent.
+IFS=$'\t' read -r f_pct f_reset s_pct s_reset c_pct c_tok c_size cost_usd <<EOF
+$(printf '%s' "$snapshot" | "$JQ" -r '
+  def d: if . == null then "-" else tostring end;
+  [ (.rate_limits.five_hour.used_percentage  | d),
+    (.rate_limits.five_hour.resets_at        | d),
+    (.rate_limits.seven_day.used_percentage  | d),
+    (.rate_limits.seven_day.resets_at        | d),
+    (.context.used_percentage                | d),
+    (.context.total_input_tokens             | d),
+    (.context.size                           | d),
+    (.cost.total_cost_usd                    | d)
+  ] | @tsv' 2>/dev/null)
+EOF
+
+DIM=$'\033[2m'; RST=$'\033[0m'
+GRN=$'\033[32m'; YLW=$'\033[33m'; RED=$'\033[31m'
+
+# Percentages arrive as floats (23.5). Bash has no float compare, and the
+# integer part is all a threshold needs.
+int() { local v="${1%%.*}"; case "$v" in ''|*[!0-9-]*) echo "" ;; *) echo "$v" ;; esac; }
+
+# Thresholds match the app's mood states: calm / pacing / wind down.
+color_for() {
+  local n; n=$(int "$1")
+  [ -n "$n" ] || { printf '%s' "$DIM"; return; }
+  if   [ "$n" -ge 80 ]; then printf '%s' "$RED"
+  elif [ "$n" -ge 50 ]; then printf '%s' "$YLW"
+  else                       printf '%s' "$GRN"
+  fi
+}
+
+# Seconds until a reset, as a coarse "3h12m" / "47m". Absent or already
+# elapsed renders as nothing rather than a negative countdown.
+countdown() {
+  local at="$1" secs h m
+  [ "$at" != "-" ] || return
+  at=$(int "$at"); [ -n "$at" ] || return
+  secs=$(( at - now )); [ "$secs" -gt 0 ] || return
+  h=$(( secs / 3600 )); m=$(( (secs % 3600) / 60 ))
+  if [ "$h" -gt 0 ]; then printf '%dh%02dm' "$h" "$m"; else printf '%dm' "$m"; fi
+}
+
+# 76000 -> "76k", 1000000 -> "1M" (the extended context window).
+ktok() {
+  local n; n=$(int "$1")
+  [ -n "$n" ] || { printf '%s' "?"; return; }
+  if   [ "$n" -ge 1000000 ]; then printf '%dM' $(( n / 1000000 ))
+  elif [ "$n" -ge 1000 ];    then printf '%dk' $(( n / 1000 ))
+  else                            printf '%d' "$n"
+  fi
+}
+
+seg=""
+
+# 5-hour window. Absent for non-subscribers and before the session's first API
+# response, in which case it is shown dimmed rather than dropped -- a missing
+# segment reads as "fine" and this is the number worth noticing.
+if [ "$f_pct" != "-" ]; then
+  left=$(countdown "$f_reset")
+  seg="${seg}$(color_for "$f_pct")5h $(int "$f_pct")%${RST}"
+  [ -n "$left" ] && seg="${seg} ${DIM}·${left}${RST}"
+else
+  seg="${seg}${DIM}5h —${RST}"
+fi
+
+if [ "$s_pct" != "-" ]; then
+  seg="${seg}   $(color_for "$s_pct")7d $(int "$s_pct")%${RST}"
+fi
+
+if [ "$c_pct" != "-" ]; then
+  seg="${seg}   $(color_for "$c_pct")ctx $(int "$c_pct")%${RST}"
+  [ "$c_tok" != "-" ] && [ "$c_size" != "-" ] &&
+    seg="${seg} ${DIM}$(ktok "$c_tok")/$(ktok "$c_size")${RST}"
+else
+  seg="${seg}   ${DIM}ctx —${RST}"
+fi
+
+if [ "$cost_usd" != "-" ]; then
+  seg="${seg}   ${DIM}\$$(printf '%.2f' "$cost_usd" 2>/dev/null || printf '0.00')${RST}"
+fi
+
+printf '%s\n' "$seg"
+exit 0

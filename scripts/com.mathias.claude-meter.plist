@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.mathias.claude-meter</string>
+
+  <!-- Launch the executable inside the bundle rather than `open`ing the app:
+       launchd can then supervise the process directly, and KeepAlive means a
+       crash brings the menubar item straight back. The bundle still supplies
+       LSUIElement because the binary lives inside it. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/mathiass/claude-meter/dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter</string>
+  </array>
+
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+  </dict>
+
+  <key>StandardOutPath</key><string>/Users/mathiass/Library/Logs/claude-meter.log</string>
+  <key>StandardErrorPath</key><string>/Users/mathiass/Library/Logs/claude-meter.log</string>
+</dict>
+</plist>
