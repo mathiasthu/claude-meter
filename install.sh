@@ -8,9 +8,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 JQ=/usr/bin/jq
 SETTINGS="$HOME/.claude/settings.json"
-PLIST_SRC="$ROOT/scripts/com.mathias.claude-meter.plist"
-PLIST_DST="$HOME/Library/LaunchAgents/com.mathias.claude-meter.plist"
-LABEL="com.mathias.claude-meter"
+LABEL="com.momentumminds.claude-meter"
+PLIST_SRC="$ROOT/scripts/$LABEL.plist.template"
+PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
+# Pre-rename label, booted out below so an upgrade does not leave two agents
+# fighting over the same menubar item.
+LEGACY_LABEL="com.mathias.claude-meter"
 
 echo "==> Building ClaudeMeter.app"
 "$ROOT/scripts/build-app.sh"
@@ -50,7 +53,15 @@ fi
 echo ""
 echo "==> LaunchAgent"
 mkdir -p "$HOME/Library/LaunchAgents"
-cp "$PLIST_SRC" "$PLIST_DST"
+# launchd cannot expand ~ or $HOME, so the template's absolute paths are
+# filled in here rather than checked in pointing at one person's home.
+sed -e "s|__ROOT__|$ROOT|g" -e "s|__HOME__|$HOME|g" "$PLIST_SRC" > "$PLIST_DST"
+
+if [ "$LEGACY_LABEL" != "$LABEL" ]; then
+  launchctl bootout "gui/$UID/$LEGACY_LABEL" 2>/dev/null || true
+  rm -f "$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist"
+fi
+
 # launchd does not pick up plist edits on its own -- bootout then bootstrap.
 launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$UID" "$PLIST_DST"

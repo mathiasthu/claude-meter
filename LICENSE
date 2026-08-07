@@ -1,0 +1,53 @@
+claude-meter
+
+Copyright (c) 2026 Momentum Minds LLC. All rights reserved.
+
+This is a source-available license, not an open source license. It is not
+OSI-approved and does not grant the freedoms an open source license would.
+
+GRANT
+
+Momentum Minds LLC grants you a worldwide, royalty-free, non-exclusive,
+non-transferable license to use, copy, modify, and redistribute this software
+and its documentation (the "Software"), subject to the conditions below.
+
+CONDITIONS
+
+1. No sale. You may not sell the Software, license it for a fee, or charge for
+   access to it. You may not include the Software, in whole or in part, in any
+   product or service that is sold, rented, licensed for a fee, or offered as
+   part of a paid subscription. Modifying the Software does not create an
+   exception to this condition.
+
+2. Ownership. The Software is and remains the property of Momentum Minds LLC.
+   This license transfers no ownership, trademark rights, or patent rights.
+
+3. Attribution. This copyright notice and this license must be included in all
+   copies or substantial portions of the Software, including modified versions.
+
+4. Derivative works. Modified versions and works derived from the Software
+   remain bound by every condition of this license, including the prohibition
+   on sale.
+
+Any use outside these conditions requires prior written permission from
+Momentum Minds LLC.
+
+NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+MOMENTUM MINDS LLC BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+TERMINATION
+
+This license terminates automatically if you breach any of its conditions. On
+termination you must stop distributing the Software and destroy copies in your
+possession.
+
+---
+
+claude-meter is not affiliated with, endorsed by, or sponsored by Anthropic.
+"Claude" and "Claude Code" are trademarks of Anthropic, PBC.

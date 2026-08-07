@@ -63,7 +63,7 @@ Snapshots live outside the repo, in `~/.local/state/claude-meter/`:
 ```
 
 That builds the app, chains the collector into the status line, adds the two
-Claude Code hooks, and loads the `com.mathias.claude-meter` LaunchAgent.
+Claude Code hooks, and loads the `com.momentumminds.claude-meter` LaunchAgent.
 
 ### The status line chain
 
@@ -74,7 +74,7 @@ kickbacks already provides: it runs whatever command is named in
 below the ad. So the install writes:
 
 ```json
-{"statusLine":{"type":"command","command":"/Users/mathiass/claude-meter/bin/claude-meter-collect"}}
+{"statusLine":{"type":"command","command":"/absolute/path/to/claude-meter/bin/claude-meter-collect"}}
 ```
 
 The kickbacks installer has overwritten that file before, which would make the
@@ -110,11 +110,22 @@ screen automatically if the display it was on goes away.
 ## Uninstall
 
 ```bash
-launchctl bootout "gui/$UID/com.mathias.claude-meter"
-rm ~/Library/LaunchAgents/com.mathias.claude-meter.plist
+launchctl bootout "gui/$UID/com.momentumminds.claude-meter"
+rm ~/Library/LaunchAgents/com.momentumminds.claude-meter.plist
 rm ~/.kickbacks/cli-prev-statusline.json     # drops the HUD line
 rm -rf ~/.local/state/claude-meter
 ```
 
 Then remove the `hooks.SessionStart` / `hooks.SessionEnd` entries from
 `~/.claude/settings.json`.
+
+## License
+
+Copyright © 2026 Momentum Minds LLC. All rights reserved.
+
+Source-available, not open source. You may use, modify, and redistribute it
+freely, but you **may not sell it** or include it in anything sold. See
+[LICENSE](LICENSE) for the full terms.
+
+Not affiliated with or endorsed by Anthropic. "Claude" and "Claude Code" are
+trademarks of Anthropic, PBC.

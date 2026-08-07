@@ -3,7 +3,7 @@
 ## State: working, installed, running
 
 Built 2026-08-07. Menubar app + floating avatar + status line HUD, all live.
-`com.mathias.claude-meter` LaunchAgent loaded, `RunAtLoad` + `KeepAlive`.
+`com.momentumminds.claude-meter` LaunchAgent loaded, `RunAtLoad` + `KeepAlive`.
 
 Verified against real payloads, not synthetic ones:
 
@@ -85,7 +85,7 @@ updating to display them.
 ./install.sh                 # build + wire + load. idempotent.
 ./scripts/build-app.sh       # rebuild the bundle only
 ./scripts/selftest.sh        # 19 headless assertions
-launchctl kickstart -k gui/$UID/com.mathias.claude-meter   # restart the app
+launchctl kickstart -k gui/$UID/com.momentumminds.claude-meter   # restart the app
 
 echo '{...}' | bin/claude-meter-collect                    # exercise the collector
 jq . ~/.local/state/claude-meter/last-raw.json             # what Claude Code last sent

@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template. install.sh substitutes __ROOT__ and __HOME__ and writes the result
+  to ~/Library/LaunchAgents/. launchd plists cannot expand ~ or $HOME, so the
+  paths have to be absolute -- which is exactly why this is a template rather
+  than a checked-in plist with someone's home directory baked into it.
+-->
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.mathias.claude-meter</string>
+  <key>Label</key><string>com.momentumminds.claude-meter</string>
 
   <!-- Launch the executable inside the bundle rather than `open`ing the app:
        launchd can then supervise the process directly, and KeepAlive means a
@@ -10,7 +16,7 @@
        LSUIElement because the binary lives inside it. -->
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/mathiass/claude-meter/dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter</string>
+    <string>__ROOT__/dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter</string>
   </array>
 
   <key>RunAtLoad</key><true/>
@@ -19,7 +25,7 @@
     <key>SuccessfulExit</key><false/>
   </dict>
 
-  <key>StandardOutPath</key><string>/Users/mathiass/Library/Logs/claude-meter.log</string>
-  <key>StandardErrorPath</key><string>/Users/mathiass/Library/Logs/claude-meter.log</string>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/claude-meter.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/claude-meter.log</string>
 </dict>
 </plist>
