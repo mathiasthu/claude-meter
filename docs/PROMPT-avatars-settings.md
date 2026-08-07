@@ -1,156 +1,171 @@
-# Prompt: avatar styles, settings, and menubar work
+# Design brief: claude-meter avatars, settings, and menubar item
 
-Paste everything below the line into Claude Code, run from the `claude-meter`
-repo root.
+Self-contained. Paste everything below the line into a design agent — it needs
+no repository access, and every fact it requires is stated here.
 
 ---
 
-Read `README.md` and `HANDOFF.md` first — they explain where the data comes
-from and which constraints are load-bearing. Then build three things.
+Design the visual system for a macOS utility called **claude-meter**. You are
+designing, not implementing: deliver specs and mockups precise enough that an
+engineer can build from them without asking follow-up questions.
 
-## What this app is
+## What the product is
 
-`claude-meter` shows Claude Code usage without opening claude.ai. A bash
-collector runs as a Claude Code statusLine command, publishes one JSON snapshot
-per session to `~/.local/state/claude-meter/sessions/<session_id>.json`, and a
-Swift menubar agent reads those. `SnapshotStore` watches that directory and
-republishes; `Mood` maps percentages to a state; `AvatarFace` draws the
-floating card; `MenubarController` owns the status item, the popover, and the
-panel.
+Claude Code is a terminal coding tool with usage limits. Its users hit two
+walls, and today they can only see either one by typing a command or opening a
+website:
 
-The single source of truth for what a real payload looks like is
-`~/.local/state/claude-meter/last-raw.json`. Read it before you assume a field
-exists.
+- **Account rate limits** — a rolling 5-hour window and a rolling 7-day window,
+  each reported as a percentage consumed plus the time it resets.
+- **Per-session context fill** — each open session has a context window that
+  fills as the conversation grows. At 100% the session stops being useful and
+  has to be compacted.
 
-## Deliverable 1 — a pluggable avatar style system
+claude-meter surfaces both, continuously, without the user asking. It lives in
+the macOS menubar with an optional floating widget on top of other windows. The
+person using it is a developer who already has a full screen of terminals and
+editors. They are not looking at this widget; they need it to catch their eye
+only when something is about to bite, and to be ignorable the rest of the time.
 
-Today there is exactly one avatar: an emoticon face in a rounded card. Replace
-that with an abstraction where adding a style is one new file, not an edit to
-five.
+## The data you have to work with
 
-Design an `AvatarStyle` protocol (or equivalent) that takes a rendering input —
-mood, 5h percent, 7d percent, worst live context percent, session count,
-staleness, whether animation is permitted — and returns a SwiftUI view. Register
-styles in one place so the settings picker and the panel both enumerate the
-same list.
+Exactly this, nothing more:
 
-Then implement at least **six** distinct styles. These are directions, not a
-spec — design them properly, and propose better ones if you have them:
+| Value | Range / notes |
+|---|---|
+| 5-hour window used | 0–100%. **Can be entirely absent.** |
+| 5-hour window resets at | A timestamp. Render as a countdown, e.g. "3h07m", "46m". |
+| 7-day window used | 0–100%. Can be absent independently. |
+| 7-day window resets at | Same, but often days away. |
+| Per-session context used | 0–100%. **Can be null** even when the session is active. |
+| Per-session tokens | e.g. 247,000 of 200,000 or 1,000,000 capacity. |
+| Per-session cost | US dollars, e.g. $11.75. Can reach three figures. |
+| Per-session name | Free text, can be long: "Phase 3 member area and public site rebuild". Can be absent, in which case a directory name is used. |
+| Model name | e.g. "Opus 5 (1M context)". Long. |
+| Snapshot age | Seconds since this data was last refreshed. |
+| Session count | **0, 1, or many.** Two or three concurrent sessions is normal. |
 
-1. **Face** — the current emoticon card, ported to the new protocol unchanged so
-   there is a known-good baseline.
-2. **Rings** — concentric arcs, outer for the 5-hour window, inner for context,
-   percentage in the middle. Glanceable from across a room.
-3. **Pill** — a wide, low, translucent bar: two small meters and their numbers
-   in one row. The most information per pixel.
-4. **Dot** — the minimum that still communicates: one colour-filled dot and a
-   number. For someone who wants it nearly invisible.
-5. **Creature** — a small pixel/sprite character with per-mood poses. Give it
-   more personality than the emoticons: idle, working, strained, panicking,
-   sleeping.
-6. **Gauge** — an analogue dial or fuel-gauge needle sweeping from calm to
-   alarmed.
+Two things about absence, because they drive real design decisions:
 
-Every style must handle the states that are not a percentage: **asleep** (no
-session active in the last 5 minutes), **stale** (data older than an hour), and
-**no data at all** (`rate_limits` absent — the user is not on a Claude.ai
-subscription, or no API response has come back yet). A style that renders these
-as "0%" is wrong: 0% and "unknown" mean opposite things here.
+- **Absent is not zero.** Rate limits are missing for users on pay-as-you-go
+  billing, and missing in any session until its first response arrives. A design
+  that renders missing data as an empty 0% bar tells the user the opposite of
+  the truth. Missing needs its own visual treatment.
+- **Data goes stale silently.** The app only receives updates while a session is
+  actively working. With no session running, nothing arrives — so the numbers on
+  screen may be minutes or hours old. The design must distinguish "current" from
+  "last seen 40 minutes ago" without the user having to think about it.
 
-Each style declares its own natural size, and the panel resizes to fit when the
-style changes.
+## States every design must handle
 
-## Deliverable 2 — settings
+Six escalating states plus three exceptions. The escalation is driven by the
+worst of (5-hour %, 7-day %, fullest active session's context %):
 
-There is no settings surface at all right now; preferences are two ad-hoc
-`UserDefaults` keys read inline. Build a real one.
+| State | Trigger |
+|---|---|
+| Calm | under 50% |
+| Focused | 50–70% |
+| Strained | 70–85% |
+| Critical | 85% and up |
+| Asleep | no session active in the last 5 minutes |
+| Stale | data older than an hour |
+| No data | no rate limits have ever arrived |
+| Empty | no sessions at all |
+| Many | 3+ concurrent sessions, each with different context fill |
 
-A `SettingsStore: ObservableObject` owning every preference, persisted to
-`UserDefaults`, with a documented default for each and a "reset to defaults"
-action. Inject it where it is needed — do not read `UserDefaults` from views.
+The thresholds above are the current defaults and will become user-editable, so
+do not design anything that only reads correctly at exactly 50/70/85.
 
-A settings window (`NSWindow`, not a popover — it should be resizable and stay
-open while the user experiments) reachable from both the menubar right-click
-menu and the popover footer. It needs a **live preview** of the selected avatar
-style driven by a fake snapshot the user can scrub through the mood range, so
-choosing a style does not mean guessing.
+## Deliverable 1 — six floating avatar styles
 
-Cover at least:
+The floating widget sits on top of everything, on any Space, and is dragged
+wherever the user wants it. It never takes keyboard focus.
 
-- **Avatar**: style, scale, opacity, show/hide, click-through (ignore mouse
-  events entirely), and whether it floats above full-screen apps.
-- **What drives the mood**: `max(5h, 7d, context)` as now, or 5h only, or
-  context only. Different people are throttled by different things.
-- **Thresholds**: the four boundaries, editable, with validation that keeps them
-  ordered and inside 0–100.
-- **Menubar**: which metric the title shows, text vs. a compact rendered icon vs.
-  both, and whether the reset countdown is included.
-- **Behaviour**: launch at login, and an override for reduce-motion.
+Design **six visually distinct styles** the user can switch between. The point
+of six is genuine range — someone who wants a character and someone who wants a
+2mm dot should both be satisfied. Directions, not a specification; propose
+better ones if you have them:
 
-Thresholds live in `Mood.swift` today **and are duplicated in the bash collector's
-HUD colouring** (`bin/claude-meter-collect`). If the user can edit them, the two
-must not drift — either have the app write a small config file the collector
-reads, or make the collector read the same `UserDefaults` domain via `defaults
-read`. Pick one and say why.
+1. **Face** — an expressive character whose expression carries the state. The
+   existing version uses text emoticons (`◕‿◕`, `◉益◉`); design something with
+   more craft than that.
+2. **Rings** — concentric arcs, one metric per ring, readable from across a room.
+3. **Pill** — wide and low, maximum information density in one row.
+4. **Dot** — the minimum that still communicates. Nearly invisible when calm.
+5. **Creature** — a small character with poses rather than just expressions:
+   idle, working, straining, panicking, sleeping.
+6. **Gauge** — analogue. A needle, a dial, a fuel gauge.
+
+For each style specify: exact pixel dimensions at 1× (and how it scales),
+internal spacing, type sizes and weights, the full colour ramp across all six
+escalation states, and what each of the three exception states looks like.
+
+Constraints: it sits over unpredictable backgrounds, so it needs its own ground
+— translucent material, a solid fill, or a strong outline. It must read in both
+light and dark system appearance. Only the critical state may animate, and that
+animation must have a still fallback for users who have asked the system to
+reduce motion. Assume 1× and 2× displays.
+
+## Deliverable 2 — a settings window
+
+There is no settings surface today. Design a resizable macOS window, native in
+feel, covering:
+
+- **Avatar**: which style, scale, opacity, show/hide, whether it ignores clicks
+  entirely, whether it floats over full-screen apps.
+- **What drives the state**: the worst of all three metrics, or the 5-hour
+  window alone, or context alone. Different people are limited by different
+  things.
+- **Thresholds**: the four boundaries, editable, kept in order, 0–100.
+- **Menubar**: which metric is shown, text vs. icon vs. both, whether the reset
+  countdown is included.
+- **Behaviour**: launch at login, reduce-motion override, reset to defaults.
+
+The window needs a **live preview** of the selected avatar with a control that
+sweeps it through every state — choosing a style must not mean guessing. Show
+how the preview is laid out relative to the controls, and how the settings are
+grouped and ordered. Assume the list of styles will grow, so the picker must
+survive twelve entries as gracefully as six.
 
 ## Deliverable 3 — the menubar item
 
-Currently a fixed text title showing the 5-hour window.
+The macOS menubar gives you roughly 22pt of height and as little width as you
+can manage. Design:
 
-- Honour the settings above: chosen metric, text/icon/both, optional countdown.
-- Build the compact icon variant — a small ring or bar rendered to an `NSImage`
-  that reads correctly in both light and dark menubars, and stays legible at
-  menubar height.
-- Add "Settings…" to the right-click menu and the popover footer.
-- Keep the existing left-click popover and right-click menu split.
+- The **compact icon**: a ring, bar, or mark that encodes the current state and
+  percentage legibly at that size, in both light and dark menubars. It must not
+  read as a system icon.
+- The **text variants**: which metric, with and without a countdown, and how
+  they degrade when data is missing.
+- The **dropdown panel** shown on click: both account windows with their reset
+  countdowns, then one row per session with its context bar, tokens, cost, and
+  age. Design it for one session, for three, and for none — and decide what
+  happens at ten. Session and model names are long enough to need a truncation
+  strategy.
 
-## Constraints that will cost you hours if you skip them
+## Anti-goals
 
-- **`@State`, `@StateObject`, and `@AppStorage` do not compile on this machine.**
-  SwiftUI's macro plugin (`SwiftUIMacros`) is absent from every toolchain and
-  SDK here, and those are macros in the current SDK. `@ObservedObject` and
-  `@Published` are ordinary property wrappers and work fine. The existing
-  `AvatarUIState` in `AvatarFace.swift` shows the pattern: hold view-local state
-  in an `ObservableObject` owned by the enclosing AppKit object. Follow it. Do
-  not "fix" it back to `@State`.
-- **Never touch `statusLine` in `~/.claude/settings.json`.** It belongs to the
-  kickbacks ad script, which rewrites it. claude-meter chains off
-  `~/.kickbacks/cli-prev-statusline.json` instead. Breaking this silently kills
-  the entire data feed with no error anywhere.
-- **The avatar panel must never take focus.** It is a `.nonactivatingPanel`,
-  `canBecomeKey` is `false`, and it is shown with `orderFrontRegardless()`. The
-  settings window is the opposite and *does* need focus — because the app is
-  `.accessory`, opening it requires `NSApp.activate(ignoringOtherApps: true)` or
-  it will appear behind everything.
-- **Every numeric field is optional.** `rate_limits` is absent for non-subscribers
-  and before a session's first API response; `context.usedPercentage` is null
-  early in a session and again right after `/compact`. Force-unwrapping any of
-  them will crash on a real machine within the hour.
-- **Respect `NSWorkspace.shared.accessibilityDisplayShouldReduceMotion`** in every
-  animated style, unless the user has overridden it in settings.
-- **No new dependencies.** AppKit, SwiftUI, Foundation, Combine only.
+- Nothing that demands attention when everything is fine. Calm should be close
+  to invisible.
+- No fake precision — no decimal places on a percentage, no second-by-second
+  countdown.
+- Nothing that misrepresents missing or stale data as current or as zero.
+- No dependence on colour alone to signal the critical state; roughly 8% of men
+  have some form of colour-vision deficiency, and this is a developer tool.
 
-## Definition of done
+## What to hand back
 
-- `./scripts/selftest.sh` still passes, extended with cases for the new settings
-  store — persistence round-trip, threshold validation rejecting out-of-order
-  values, and defaults on a clean domain.
-- `./scripts/build-app.sh` builds with no warnings.
-- Every avatar style renders in all six mood states plus the no-data state.
-  Prove it: add a preview/debug mode that renders the full grid, since these are
-  states you cannot reach on demand from real data.
-- Switching style, scale, opacity, or threshold updates the avatar and menubar
-  **without a restart**.
-- Settings survive a relaunch (`launchctl kickstart -k
-  gui/$UID/com.momentumminds.claude-meter`).
-- `HANDOFF.md` updated: what changed, and any new gotcha you hit.
+For each of the three deliverables:
 
-## Verifying, given you cannot screenshot
+1. A short statement of intent — what this style or screen is *for*, and who
+   picks it.
+2. Exact specs: dimensions, spacing, type scale, colour values as named tokens
+   (not raw hex scattered through prose), and motion timing where relevant.
+3. A **self-contained HTML or SVG mockup sheet** rendering every state side by
+   side, in both light and dark appearance, so the whole system can be compared
+   at once. No external assets, fonts, or scripts — it must open standalone.
+4. A one-paragraph rationale for anything non-obvious, especially how you chose
+   to represent missing and stale data.
 
-Screen recording is denied to the terminal on this machine, so `screencapture`
-fails with "could not create image from display". Do not burn time on it. Verify
-with headless tests over the store and the settings model, exercise the state
-machine by writing crafted snapshot files into
-`~/.local/state/claude-meter/sessions/`, and then **ask the user to look at the
-result** and describe what they see. Do not claim the UI looks right — you
-cannot see it.
+Start by proposing the six avatar directions in one or two sentences each and
+asking which to develop, rather than fully rendering all six unprompted.
