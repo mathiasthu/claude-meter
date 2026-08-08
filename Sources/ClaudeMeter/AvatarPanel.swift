@@ -102,6 +102,20 @@ final class AvatarPanel: NSPanel {
         setFrame(NSRect(x: frame.minX, y: top - fitted.height,
                         width: fitted.width, height: fitted.height),
                  display: true)
+        clampOnScreen()
+    }
+
+    /// Growing downward can push the panel under the bottom edge. Nudge it
+    /// back rather than leaving it somewhere the user cannot grab it.
+    private func clampOnScreen() {
+        guard let screen = NSScreen.screens.first(where: {
+            $0.visibleFrame.intersects(frame)
+        }) ?? NSScreen.main ?? NSScreen.screens.first else { return }
+        let v = screen.visibleFrame
+        var o = frame.origin
+        o.x = min(max(o.x, v.minX), v.maxX - frame.width)
+        o.y = min(max(o.y, v.minY), v.maxY - frame.height)
+        if o != frame.origin { setFrameOrigin(o) }
     }
 
     // MARK: - Position
@@ -116,8 +130,9 @@ final class AvatarPanel: NSPanel {
            let x = saved["x"] as? CGFloat, let y = saved["y"] as? CGFloat {
             let candidate = NSPoint(x: x, y: y)
             // A saved position can land off-screen after a monitor is
-            // unplugged, which would hide the widget with no way to get it
-            // back. Only honour it if it still intersects a screen.
+            // unplugged, or after the avatar grows and its top-left anchor
+            // pushes it under the edge. Only honour it if it still intersects
+            // a screen; otherwise fall through to the default corner.
             let stillVisible = NSScreen.screens.contains {
                 $0.visibleFrame.intersects(NSRect(origin: candidate, size: frame.size))
             }
@@ -130,7 +145,11 @@ final class AvatarPanel: NSPanel {
     }
 
     private func moveToDefaultCorner() {
-        guard let screen = NSScreen.main else { return }
+        // NSScreen.main is the screen holding the key window, and an agent app
+        // with no key window has none — it returns nil. Relying on it meant
+        // this silently did nothing and left the panel at the origin, off the
+        // bottom-left corner of the screen with no way to get it back.
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         let visible = screen.visibleFrame
         setFrameOrigin(NSPoint(x: visible.maxX - frame.width - 20,
                                y: visible.maxY - frame.height - 20))

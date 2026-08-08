@@ -28,6 +28,9 @@ struct PillAvatar: View {
                 Capsule().strokeBorder(Tokens.hairlineC, lineWidth: 1)
             }
             .opacity(input.state == .empty ? 0.6 : 1)
+            // The capsule is this style's plate, so it follows the same
+            // setting. Text without it leans on the drop shadow instead.
+            .opacity(input.showsBackground ? 1 : 0)
         )
         .fixedSize()
     }

@@ -111,6 +111,11 @@ the 5-hour window or context alone.
 | No data | rate limits have never arrived |
 | Empty | no sessions at all |
 
+The floating avatar shows the character alone by default — no plate behind it,
+just a drop shadow that follows the silhouette. A plate is available in Settings
+for busy wallpaper; the styles draw one either way for the `empty` state, where
+a dashed outline is the entire message.
+
 Thresholds are editable. Critical is never colour alone — each style adds a
 geometric cue (badge, warning triangle, airborne pose, ring), so escalation
 survives colour-vision deficiency and greyscale. Animation respects the system

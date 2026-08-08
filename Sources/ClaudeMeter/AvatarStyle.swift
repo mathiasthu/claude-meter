@@ -71,9 +71,11 @@ struct AvatarInk {
     /// Grey stand-in used by every exception state, so a stale or sleeping
     /// avatar can never be mistaken for a live reading.
     let greyed: Color
+    let showsBackground: Bool
 
-    init(_ state: MeterState) {
+    init(_ state: MeterState, showsBackground: Bool = true) {
         self.state = state
+        self.showsBackground = showsBackground
         ground = Tokens.groundC
         hairline = Tokens.hairlineC
         inkSoft = Tokens.inkSoftC
@@ -93,6 +95,10 @@ enum AvatarChrome {
     static func ground(_ ctx: inout GraphicsContext, rect: CGRect, radius: CGFloat,
                        ink: AvatarInk) {
         let path = Path(roundedRect: rect, cornerRadius: radius, style: .continuous)
+        // With the plate off there is nothing to draw — except for `empty`,
+        // where the dashed outline is the entire message and the styles would
+        // otherwise render nothing at all.
+        if !ink.showsBackground && ink.state != .empty { return }
         switch ink.state {
         case .empty:
             ctx.opacity = 0.6
@@ -191,7 +197,13 @@ struct ScaledAvatar: View {
 
     var body: some View {
         ScaledLayout(scale: scale) {
-            style.view(input).scaleEffect(scale)
+            style.view(input)
+                // Without a plate behind it the art has to hold its own edge
+                // against pale wallpaper. A shadow follows the silhouette,
+                // which is the whole reason it beats a card.
+                .shadow(color: .black.opacity(input.showsBackground ? 0 : 0.45),
+                        radius: 2.5, x: 0, y: 1)
+                .scaleEffect(scale)
         }
         .opacity(opacity)
         .fixedSize()

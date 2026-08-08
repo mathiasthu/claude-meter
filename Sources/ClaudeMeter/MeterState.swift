@@ -80,6 +80,11 @@ struct AvatarInput {
     var age: TimeInterval?
     /// False when the system (or the user) has asked for reduced motion.
     var motionAllowed: Bool = true
+    /// Whether to draw the plate each style normally sits on. Off by default:
+    /// at avatar size the plate reads as a card with a picture in it rather
+    /// than as the character itself. With it off the styles get a drop shadow
+    /// instead, which is what keeps them legible over pale wallpaper.
+    var showsBackground: Bool = false
 
     /// Three or more concurrent sessions switches styles to their multi
     /// variant. Two is common enough to be unremarkable.

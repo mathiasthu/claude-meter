@@ -19,11 +19,17 @@ final class SettingsStore: ObservableObject {
     // MARK: Avatar
 
     @Published var styleID: AvatarStyleID = .pixelCreature { didSet { save() } }
-    @Published var scale: Double = 1.0                      { didSet { save() } }
+    // 48 pt of pixel art is too small to read at a glance on a large display,
+    // so the default is well above 1x.
+    @Published var scale: Double = 1.75                     { didSet { save() } }
     @Published var opacity: Double = 0.95                   { didSet { save() } }
     @Published var avatarVisible: Bool = true               { didSet { save() } }
     @Published var ignoreMouse: Bool = false                { didSet { save() } }
     @Published var floatOverFullScreen: Bool = true         { didSet { save() } }
+    /// The plate each style draws behind itself. Off by default: at avatar
+    /// size it reads as a card with a picture in it rather than as the
+    /// character. With it off the art gets a drop shadow instead.
+    @Published var showBackground: Bool = false             { didSet { save() } }
 
     // MARK: State source
 
@@ -68,6 +74,7 @@ final class SettingsStore: ObservableObject {
         static let visible = "avatar.visible"
         static let ignoreMouse = "avatar.ignoreMouse"
         static let fullScreen = "avatar.floatOverFullScreen"
+        static let background = "avatar.showBackground"
         static let source = "state.source"
         static let thresholds = "state.thresholds"
         static let mbMetric = "menubar.metric"
@@ -92,6 +99,7 @@ final class SettingsStore: ObservableObject {
         if let v = defaults.object(forKey: K.visible) as? Bool { avatarVisible = v }
         if let v = defaults.object(forKey: K.ignoreMouse) as? Bool { ignoreMouse = v }
         if let v = defaults.object(forKey: K.fullScreen) as? Bool { floatOverFullScreen = v }
+        if let v = defaults.object(forKey: K.background) as? Bool { showBackground = v }
         if let s = defaults.string(forKey: K.source), let v = StateSource(rawValue: s) {
             stateSource = v
         }
@@ -120,6 +128,7 @@ final class SettingsStore: ObservableObject {
         defaults.set(avatarVisible, forKey: K.visible)
         defaults.set(ignoreMouse, forKey: K.ignoreMouse)
         defaults.set(floatOverFullScreen, forKey: K.fullScreen)
+        defaults.set(showBackground, forKey: K.background)
         defaults.set(stateSource.rawValue, forKey: K.source)
         if let data = try? JSONEncoder().encode(thresholds) {
             defaults.set(data, forKey: K.thresholds)
@@ -134,11 +143,12 @@ final class SettingsStore: ObservableObject {
     func resetToDefaults() {
         loading = true
         styleID = .pixelCreature
-        scale = 1.0
+        scale = 1.75
         opacity = 0.95
         avatarVisible = true
         ignoreMouse = false
         floatOverFullScreen = true
+        showBackground = false
         stateSource = .worst
         thresholds = .default
         menubarMetric = .fiveHour

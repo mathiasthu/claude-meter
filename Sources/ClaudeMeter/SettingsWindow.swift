@@ -309,7 +309,7 @@ struct AvatarPane: View {
             SettingsCard {
                 SettingRow("Scale") {
                     HStack {
-                        Slider(value: $settings.scale, in: 0.5...2.0).frame(width: 130)
+                        Slider(value: $settings.scale, in: 0.5...4.0).frame(width: 130)
                         Text("\(Int(settings.scale * 100))%")
                             .font(Typo.mono(11)).foregroundStyle(.secondary)
                             .frame(width: 42, alignment: .trailing)
@@ -323,6 +323,11 @@ struct AvatarPane: View {
                             .font(Typo.mono(11)).foregroundStyle(.secondary)
                             .frame(width: 42, alignment: .trailing)
                     }
+                }
+                Divider()
+                SettingRow("Background plate",
+                           note: "Off shows the character alone, with a shadow.") {
+                    Toggle("", isOn: $settings.showBackground).labelsHidden()
                 }
                 Divider()
                 SettingRow("Show floating avatar") {
@@ -347,7 +352,7 @@ struct AvatarPane: View {
         AvatarInput(state: .focused, percentage: 62, fiveHour: 62,
                     fiveHourResetsAt: Date().timeIntervalSince1970 + 11_220,
                     sevenDay: 38, context: 45, sessions: [45],
-                    age: 12, motionAllowed: false)
+                    age: 12, motionAllowed: false, showsBackground: true)
     }
 }
 

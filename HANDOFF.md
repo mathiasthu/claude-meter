@@ -127,6 +127,30 @@ Screenshotted live on 2026-08-08, after screen recording came back:
 - `docs/settings-avatar.png` and `docs/settings-thresholds.png` are those
   screenshots.
 
+## Fixed after looking at it on screen
+
+- **The plate read as a card with a picture in it**, not as a character. It is
+  off by default now (`Background plate` in Settings), replaced by a drop
+  shadow that follows the silhouette. `empty` keeps its dashed outline in both
+  modes, since without it that state would draw nothing at all.
+- **Default scale was 1x**, which is 48 pt of pixel art — too small to read at a
+  glance. Now 1.75x, and the slider reaches 4x instead of 2x.
+- **`NSScreen.main` is nil for an agent app with no key window.**
+  `moveToDefaultCorner()` guarded on it and so silently did nothing, leaving the
+  panel at the origin — off the bottom-left corner, unreachable. It only
+  surfaced when the bigger avatar made a stored origin fail its on-screen check
+  and fall through to that path. Now falls back to `NSScreen.screens.first`, and
+  `resizeToFit()` clamps the frame back on screen after growing.
+
+## Known legibility limits without a plate
+
+- The blob creature's calm and no-data states are the dormant grey, which
+  nearly disappears on a pale wallpaper. The drop shadow is all that separates
+  it. Turn the plate on, or pick a style whose resting colour is not grey — the
+  pixel creature rests at brand orange.
+- The pixel creature's asleep and stale states are grey for the same reason and
+  have the same caveat.
+
 ## Next steps
 
 - Decide whether the pixel creature sits too high in its ground. Content spans

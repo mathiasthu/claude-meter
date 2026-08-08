@@ -29,7 +29,7 @@ struct FaceAvatar: View {
     }
 
     private func draw(_ ctx: inout GraphicsContext) {
-        let ink = AvatarInk(input.state)
+        let ink = AvatarInk(input.state, showsBackground: input.showsBackground)
         AvatarChrome.ground(&ctx, rect: CGRect(x: 1.5, y: 1.5, width: 41, height: 41),
                             radius: 12, ink: ink)
 

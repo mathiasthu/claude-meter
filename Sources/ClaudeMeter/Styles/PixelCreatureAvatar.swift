@@ -48,7 +48,7 @@ struct PixelCreatureAvatar: View {
     }
 
     private func draw(_ ctx: inout GraphicsContext) {
-        let ink = AvatarInk(input.state)
+        let ink = AvatarInk(input.state, showsBackground: input.showsBackground)
         AvatarChrome.ground(&ctx, rect: CGRect(x: 1.5, y: 1.5, width: 45, height: 45),
                             radius: 14, ink: ink)
         // The critical pose is drawn by the animated layer instead, so the two

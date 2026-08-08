@@ -129,7 +129,8 @@ final class SnapshotStore: ObservableObject {
             context: worstContext,
             sessions: liveSessions.map { $0.context.usedPercentage },
             age: newestAge,
-            motionAllowed: settings.motionAllowed
+            motionAllowed: settings.motionAllowed,
+            showsBackground: settings.showBackground
         )
     }
 
