@@ -129,8 +129,9 @@ Screenshotted live on 2026-08-08, after screen recording came back:
 
 - Menubar mark renders with its stem, arc clockwise from the top, text
   "5h 8% · 4h51m". Calm's arc is deliberately low-contrast.
-- The floating pixel creature sits on its translucent squircle and reads over
-  both a dark editor panel and wallpaper.
+- The floating pixel creature reads over both a dark editor panel and wallpaper.
+  (That screenshot predates the plate coming off; it now renders bare with a
+  drop shadow, re-checked at 1.75× and still legible over both.)
 - Settings window: sidebar, the pinned preview strip with both appearances
   resolving differently (this was the open question — `environment(\.colorScheme:)`
   does work inside a live `NSHostingView`), sweep slider, exception chips, the
