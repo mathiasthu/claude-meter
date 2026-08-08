@@ -12,14 +12,14 @@
 
 set -u
 
-JQ=/usr/bin/jq
+JQ="$(command -v jq || true)"
 STATE="${CLAUDE_METER_STATE:-$HOME/.local/state/claude-meter}"
 SESSIONS="$STATE/sessions"
 
 input=$(cat 2>/dev/null)
 
 sid=""
-if [ -n "$input" ] && [ -x "$JQ" ]; then
+if [ -n "$input" ] && [ -n "$JQ" ]; then
   sid=$(printf '%s' "$input" | "$JQ" -r '.session_id // empty' 2>/dev/null)
 fi
 [ -n "$sid" ] || sid="${CLAUDE_SESSION_ID:-}"

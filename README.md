@@ -48,6 +48,7 @@ and `/context` are built in.
 | `Sources/ClaudeMeter/` | The menubar app and floating avatar. |
 | `scripts/build-app.sh` | Builds `dist/ClaudeMeter.app`. |
 | `scripts/selftest.sh` | Headless tests for the store, moods, liveness, and malformed input. |
+| `scripts/selftest-install.sh` | Headless tests for the installer and hooks, against a fake `$HOME`. |
 | `install.sh` | Does all of the wiring below. Idempotent. |
 
 Snapshots live outside the repo, in `~/.local/state/claude-meter/`:
@@ -57,30 +58,53 @@ Snapshots live outside the repo, in `~/.local/state/claude-meter/`:
 
 ## Install
 
+Needs macOS 14 or later, the Xcode command line tools (`xcode-select
+--install`), and `jq` (`brew install jq`). `install.sh` checks all three before
+it changes anything.
+
 ```bash
+git clone https://github.com/mathiasthu/claude-meter
+cd claude-meter
 ./install.sh
 ```
 
-That builds the app, chains the collector into the status line, adds the two
+That builds the app, wires the collector into the status line, adds the two
 Claude Code hooks, and loads the `com.momentumminds.claude-meter` LaunchAgent.
+It is idempotent — re-run it after `git pull`.
+
+Clone it wherever you like, but leave it there: the LaunchAgent and both hooks
+point at the checkout. If you move it, re-run `./install.sh` from the new
+location.
+
+### What it changes
+
+- `~/.claude/settings.json` — adds `statusLine` and two `hooks` entries. Both
+  are appended, never assigned, so another tool's hooks survive. A `statusLine`
+  you already set is left alone and the install stops with instructions rather
+  than replacing it. The file is copied to `settings.json.claude-meter-bak`
+  before the first change.
+- `~/Library/LaunchAgents/com.momentumminds.claude-meter.plist` — starts the app
+  at login.
+- `~/.local/state/claude-meter/` — the snapshots.
+
+Nothing is written outside those paths, and nothing leaves the machine.
 
 ### The status line chain
 
-`~/.claude/settings.json`'s `statusLine` belongs to the kickbacks ad script,
-which rewrites it. Rather than fight that, claude-meter uses the chain hook
-kickbacks already provides: it runs whatever command is named in
+If the kickbacks ad script is installed it owns `statusLine` in settings.json
+and rewrites it. Rather than fight for the slot, claude-meter uses the chain
+hook kickbacks already provides: it runs whatever command is named in
 `~/.kickbacks/cli-prev-statusline.json` and stacks that output on the lines
-below the ad. So the install writes:
+below the ad. So the install writes that file instead:
 
 ```json
 {"statusLine":{"type":"command","command":"/absolute/path/to/claude-meter/bin/claude-meter-collect"}}
 ```
 
-The kickbacks installer has overwritten that file before, which would make the
-HUD vanish silently. The `SessionStart` hook re-asserts it every session.
-
-Without kickbacks, point `statusLine.command` straight at
-`bin/claude-meter-collect` instead.
+The kickbacks installer has overwritten it before, which would make the HUD
+vanish silently. The `SessionStart` hook re-asserts it every session — and, on a
+machine without kickbacks, re-claims `statusLine` in settings.json if it is ever
+found empty.
 
 ## Reading the avatar
 
@@ -178,12 +202,20 @@ AppKit-backed controls, so the settings panes need the real window.
 ```bash
 launchctl bootout "gui/$UID/com.momentumminds.claude-meter"
 rm ~/Library/LaunchAgents/com.momentumminds.claude-meter.plist
-rm ~/.kickbacks/cli-prev-statusline.json     # drops the HUD line
 rm -rf ~/.local/state/claude-meter
 ```
 
 Then remove the `hooks.SessionStart` / `hooks.SessionEnd` entries from
-`~/.claude/settings.json`.
+`~/.claude/settings.json`, along with `statusLine` if it names the collector.
+
+If you use kickbacks, restore the command claude-meter displaced rather than
+deleting the file — it belongs to kickbacks, and the original is sitting next to
+it:
+
+```bash
+mv ~/.kickbacks/cli-prev-statusline.json.claude-meter-bak \
+   ~/.kickbacks/cli-prev-statusline.json
+```
 
 ## License
 

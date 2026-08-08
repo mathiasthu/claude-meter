@@ -21,7 +21,23 @@
 
 set -u
 
-JQ=/usr/bin/jq
+# Every number this script formats is machine-facing, so it is pinned to the C
+# numeric locale. Under a comma-decimal locale printf both misparses "8.34" as 8
+# and prints the result back as "8,00", which is what most of Europe would see
+# on every assistant message.
+#
+# Two subtleties: LC_ALL overrides every LC_* variable, so it has to go before
+# LC_NUMERIC can take effect; and bash only re-reads its locale on a real
+# assignment, so the `LC_ALL=C printf` prefix form silently does nothing to the
+# builtin. Only LC_NUMERIC is forced -- LC_CTYPE is left alone so session names
+# keep whatever encoding the user's shell gave them.
+unset LC_ALL
+export LC_NUMERIC=C
+
+# Resolved from PATH, not hardcoded to /usr/bin/jq: a Homebrew jq is the common
+# case on older macOS, and without this the collector silently does nothing
+# forever with no symptom but an empty menubar item.
+JQ="$(command -v jq || true)"
 STATE="${CLAUDE_METER_STATE:-$HOME/.local/state/claude-meter}"
 SESSIONS="$STATE/sessions"
 MAX_AGE_MIN=1440
@@ -29,7 +45,7 @@ MAX_AGE_MIN=1440
 input=$(cat)
 
 # No jq, or nothing on stdin: print nothing and get out of the way.
-[ -x "$JQ" ] || exit 0
+[ -n "$JQ" ] || exit 0
 [ -n "$input" ] || exit 0
 
 mkdir -p "$SESSIONS" 2>/dev/null || exit 0
@@ -177,7 +193,11 @@ else
 fi
 
 if [ "$cost_usd" != "-" ]; then
-  seg="${seg}   ${DIM}\$$(printf '%.2f' "$cost_usd" 2>/dev/null || printf '0.00')${RST}"
+  # Captured before use: the old `printf || printf '0.00'` fallback appended a
+  # second number when the first one failed, printing "$0.008.34" rather than
+  # nothing. A cost that will not parse is dropped instead.
+  money=$(printf '%.2f' "$cost_usd" 2>/dev/null) || money=""
+  [ -n "$money" ] && seg="${seg}   ${DIM}\$${money}${RST}"
 fi
 
 printf '%s\n' "$seg"

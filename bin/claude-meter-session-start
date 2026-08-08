@@ -1,46 +1,76 @@
 #!/bin/bash
-# claude-meter SessionStart hook -- self-heals the status line chain.
+# claude-meter SessionStart hook -- self-heals whichever channel carries the data.
 #
-# The statusLine slot in ~/.claude/settings.json belongs to the kickbacks ad
-# script, which rewrites it. Rather than fight that, claude-meter hangs off the
-# chain hook kickbacks provides: it runs whatever command is named in
-# ~/.kickbacks/cli-prev-statusline.json and stacks that output below the ad.
+# rate_limits and context_window reach this machine through the status line and
+# nowhere else, so if that wiring is lost the HUD vanishes and the menubar app
+# quietly goes stale with no error anywhere. This hook re-asserts it on every
+# session start.
 #
-# That file is also written by the kickbacks installer, which has clobbered it
-# before (see cli-prev-statusline.json.bak-175531). If it disappears or stops
-# pointing at the collector, the HUD silently vanishes and the menubar app
-# quietly goes stale -- a failure with no error anywhere. So re-assert it on
-# every session start.
+# There are two channels depending on what else is installed:
 #
-# Only ever rewrites when the file is missing or points somewhere else, and
-# backs up whatever was there first.
+#   - With the kickbacks ad script, statusLine in settings.json belongs to it,
+#     and it chains to whatever is named in ~/.kickbacks/cli-prev-statusline.json.
+#     That file is also written by the kickbacks installer, which has clobbered
+#     it before (see cli-prev-statusline.json.bak-175531).
+#   - Without kickbacks, claude-meter owns statusLine in settings.json directly.
+#
+# Either way this only writes when the slot is empty or already ours. A status
+# line the user deliberately pointed somewhere else is left alone -- a hook that
+# fights the user's own config every 30 seconds is worse than no hook.
+#
+# Never fails a session start: every path exits 0.
 
 set -u
 
-JQ=/usr/bin/jq
+JQ="$(command -v jq || true)"
+# Resolved from this script's own location so the hook works from any checkout.
+# Hardcoding $HOME/claude-meter made it a permanent no-op for anyone who cloned
+# anywhere else, which is a silent failure with no symptom but an empty menubar.
+BIN="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+COLLECT="${CLAUDE_METER_COLLECT:-$BIN/claude-meter-collect}"
 CHAIN="$HOME/.kickbacks/cli-prev-statusline.json"
-COLLECT="${CLAUDE_METER_COLLECT:-$HOME/claude-meter/bin/claude-meter-collect}"
+SETTINGS="$HOME/.claude/settings.json"
 
-# No kickbacks installed: nothing to chain off, and creating the file would be
-# meaningless. A plain statusLine setup does not need this hook at all.
-[ -d "$HOME/.kickbacks" ] || exit 0
+[ -n "$JQ" ] || exit 0
 [ -x "$COLLECT" ] || exit 0
 
-current=""
-if [ -f "$CHAIN" ] && [ -x "$JQ" ]; then
-  current=$("$JQ" -r '.statusLine.command // empty' "$CHAIN" 2>/dev/null)
+# Copies a file aside once, the first time it is displaced. Never overwritten,
+# so repeated session starts cannot bury the user's original under our own.
+backup_once() {
+  [ -f "$1" ] || return 0
+  [ -e "$1.claude-meter-bak" ] && return 0
+  cp -f "$1" "$1.claude-meter-bak" 2>/dev/null
+}
+
+if [ -d "$HOME/.kickbacks" ]; then
+  current=""
+  [ -f "$CHAIN" ] && current=$("$JQ" -r '.statusLine.command // empty' "$CHAIN" 2>/dev/null)
+  [ "$current" = "$COLLECT" ] && exit 0
+
+  backup_once "$CHAIN"
+  tmp="$CHAIN.tmp.$$"
+  if "$JQ" -n --arg c "$COLLECT" \
+       '{statusLine:{type:"command",command:$c}}' > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$CHAIN" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  exit 0
 fi
 
-[ "$current" = "$COLLECT" ] && exit 0
+# No kickbacks: statusLine in settings.json is ours to hold, but only if nothing
+# else has claimed it.
+[ -f "$SETTINGS" ] || exit 0
+current=$("$JQ" -r '.statusLine.command // empty' "$SETTINGS" 2>/dev/null)
+[ -n "$current" ] && exit 0
 
-# Preserve whatever was displaced -- if this ever fires against a status line
-# the user actually wanted, the old command is still recoverable.
-if [ -f "$CHAIN" ]; then
-  cp -f "$CHAIN" "$CHAIN.claude-meter-bak" 2>/dev/null
-fi
-
-tmp="$CHAIN.tmp.$$"
-if printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$COLLECT" > "$tmp" 2>/dev/null; then
-  mv -f "$tmp" "$CHAIN" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+backup_once "$SETTINGS"
+tmp="$SETTINGS.claude-meter.tmp.$$"
+if "$JQ" --arg c "$COLLECT" \
+     '.statusLine = {"type":"command","command":$c}' "$SETTINGS" > "$tmp" 2>/dev/null &&
+   [ -s "$tmp" ]; then
+  mv -f "$tmp" "$SETTINGS" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+else
+  rm -f "$tmp" 2>/dev/null
 fi
 exit 0
