@@ -137,7 +137,8 @@ MainActor.assumeIsolated {
     check("default style is pixel creature", s1.styleID == .pixelCreature, "\(s1.styleID)")
     check("default thresholds 50/70/85",
           s1.thresholds == Thresholds.default, "\(s1.thresholds)")
-    check("default scale is 1", s1.scale == 1.0, "\(s1.scale)")
+    check("default scale is 1.75", s1.scale == 1.75, "\(s1.scale)")
+    check("background plate off by default", s1.showBackground == false, "\(s1.showBackground)")
 
     // --- settings: persistence round-trip ---
     s1.styleID = .pill

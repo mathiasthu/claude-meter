@@ -7,14 +7,13 @@ A menubar item plus a floating avatar, fed by a collector that hangs off Claude
 Code's status line.
 
 ```
-menubar:   5h 41%
+menubar:      ◔ 5h 41% · 3h07m
 
-avatar:    ╭───────╮
-           │  ◕‿◕  │   5h  41%
-           ╰───────╯   ctx 22%
+avatar:       a small character on top of your windows, no window chrome,
+              whose pose and colour track how close you are to a wall
 
-status line (below the kickbacks ad):
-           5h 41% ·3h07m   7d 15%   ctx 22% 225k/1M   $8.34
+status line:  5h 41% ·3h07m   7d 15%   ctx 22% 225k/1M   $8.34
+              (stacked under the kickbacks ad line)
 ```
 
 ## Why it works this way
