@@ -114,10 +114,10 @@ Four styles, switchable in Settings:
 
 | Style | Size | For |
 |---|---|---|
+| **Creature · pixel** (default) | 48×48 | A blocky quadruped whose stance carries the state. Native next to a monospace prompt, and the only one that gets its laptop out and codes. |
+| **Creature · blob** | 48×48 | The soft-bodied original. Same pose grammar: works, sweats, panics, sleeps. |
 | **Face** | 44×44 | A companion, not an instrument. Learn the expressions once and stop reading numbers. |
 | **Pill** | 128×30, grows | Maximum truth per pixel: worst metric, its number, its deadline, in one row. |
-| **Creature · pixel** | 48×48 | A blocky quadruped whose stance carries the state. Native next to a monospace prompt. |
-| **Creature · blob** | 48×48 | The soft-bodied original. Same pose grammar: works, sweats, panics, sleeps. |
 
 By default the state reflects `max(5h%, 7d%, worst live session context%)` — any
 one of the three filling up is worth reacting to. Settings can narrow that to

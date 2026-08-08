@@ -58,13 +58,20 @@ final class SettingsUIState: ObservableObject {
 /// Owns the settings window. A real window rather than a popover: it is
 /// resizable and stays open while the user experiments with a style.
 @MainActor
-final class SettingsWindowController {
+final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private let ui = SettingsUIState()
     private let settings: SettingsStore
 
+    /// `--open-settings` exists so the window can be photographed, and the
+    /// shell that took the screenshot is about to take focus back. Closing on
+    /// resign-key would shut the window before the shutter, so that path opts
+    /// out. Nothing else does.
+    var closesWhenDeactivated = true
+
     init(settings: SettingsStore = .shared) {
         self.settings = settings
+        super.init()
     }
 
     /// Debug affordance for screenshots: open straight to a named pane.
@@ -87,6 +94,7 @@ final class SettingsWindowController {
             // this reference dangling and crash the second time Settings is
             // opened.
             w.isReleasedWhenClosed = false
+            w.delegate = self
             w.center()
             w.setFrameAutosaveName("claude-meter-settings")
             w.contentView = NSHostingView(
@@ -98,6 +106,39 @@ final class SettingsWindowController {
         // Without this the window opens behind whatever is in front.
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Clicking away closes it. An `.accessory` app is not in the activation
+    /// order, so a settings window it leaves open sits on top of whatever the
+    /// user moved on to with no obvious way to dismiss it.
+    ///
+    /// Closing rather than hiding is safe because `isReleasedWhenClosed` is
+    /// off: the NSWindow survives, `window` stays valid, and `show()` puts the
+    /// same instance back with its pane, its frame and its preview intact.
+    func windowDidResignKey(_ notification: Notification) {
+        guard closesWhenDeactivated else { return }
+        // Deciding on the next turn rather than inside the notification is
+        // what keeps the window's own controls from dismissing it. The reset
+        // confirmation is a sheet, and a sheet takes key from the window it is
+        // attached to — but `attachedSheet` is not populated yet at the moment
+        // the parent resigns, so testing it here would not see it. One turn
+        // later it is set, and anything that borrows key for the length of its
+        // own tracking has handed it back.
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.closesWhenDeactivated,
+                      let w = self.window, w.isVisible,
+                      w.attachedSheet == nil else { return }
+                // Both tests, because they disagree mid-transition. Bringing
+                // the window up fires a resign-key that lands while AppKit
+                // already regards it as the application's key window: traced
+                // as isKeyWindow false and NSApp.keyWindow pointing at this
+                // very window, a few milliseconds after it was shown. Closing
+                // on that reading would shut Settings the instant it opened.
+                guard !w.isKeyWindow, NSApp.keyWindow !== w else { return }
+                w.close()
+            }
+        }
     }
 
     /// `setFrameAutosaveName` restores the last frame verbatim, including onto

@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // path promotes to a regular app first. The shipping launch never
             // takes this branch.
             NSApp.setActivationPolicy(.regular)
+            controller.keepSettingsOpenWhileScreenshotting()
             let args = CommandLine.arguments
             let pane = (args.firstIndex(of: "--settings-pane")).flatMap {
                 $0 + 1 < args.count ? args[$0 + 1] : nil

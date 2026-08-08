@@ -15,6 +15,12 @@ enum RenderGrid {
     /// thread, so this just makes that explicit.
     @MainActor
     static func run(to path: String) -> Bool {
+        // The menubar mark is an AppKit template image tinted against the
+        // process appearance, so without pinning it the same code renders a
+        // different sheet depending on whether the machine is in dark mode --
+        // which turns "diff this against the committed PNG" into a coin toss.
+        // Light, because that is what the committed sheet was rendered in.
+        NSApp.appearance = NSAppearance(named: .aqua)
         let renderer = ImageRenderer(content: Sheet())
         renderer.scale = 2
         guard let image = renderer.nsImage,

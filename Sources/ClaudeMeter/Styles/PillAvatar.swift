@@ -7,21 +7,32 @@ import SwiftUI
 /// ("no limits · ctx 45%") rather than printing 0%.
 struct PillAvatar: View {
     let input: AvatarInput
+    /// The user's scale, applied to this style's own metrics rather than to its
+    /// rendered output.
+    ///
+    /// Every other style is drawn and then magnified by `scaleEffect`, which is
+    /// right for artwork on a pixel grid and wrong for type: it rasterises 11 pt
+    /// text and resamples it, so at 190% the numbers came out soft. Taking the
+    /// factor here instead means the font is asked for at its final size and
+    /// the glyphs are rendered sharp. Everything below is therefore a multiple
+    /// of `s`, including the glyph, or the pill grows out of proportion.
+    var scale: CGFloat = 1
 
     private var text: String { Self.caption(input) }
+    private var s: CGFloat { scale }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 8 * s) {
             glyph
             Text(text)
-                .font(Typo.mono(11, input.state == .critical ? .semibold : .medium))
+                .font(Typo.mono(11 * s, input.state == .critical ? .semibold : .medium))
                 .foregroundColor(textColor)
                 .fixedSize()
         }
-        .padding(.leading, 9)
-        .padding(.trailing, 12)
-        .frame(height: 30)
-        .frame(minWidth: 96)
+        .padding(.leading, 9 * s)
+        .padding(.trailing, 12 * s)
+        .frame(height: 30 * s)
+        .frame(minWidth: 96 * s)
         .background(
             ZStack {
                 Capsule().fill(Tokens.groundC)
@@ -51,18 +62,20 @@ struct PillAvatar: View {
         case .critical:
             PulsingBadge(animates: input.animates) {
                 ZStack {
-                    Triangle().fill(Tokens.criticalC).frame(width: 15, height: 13)
-                    Text("!").font(Typo.ui(8, .heavy)).foregroundColor(.white)
-                        .offset(y: 2)
+                    Triangle().fill(Tokens.criticalC).frame(width: 15 * s, height: 13 * s)
+                    Text("!").font(Typo.ui(8 * s, .heavy)).foregroundColor(.white)
+                        .offset(y: 2 * s)
                 }
             }
-            .frame(width: 15)
+            .frame(width: 15 * s)
         case .asleep, .empty:
-            Circle().strokeBorder(Tokens.calmC, lineWidth: 1.6).frame(width: 7, height: 7)
+            Circle().strokeBorder(Tokens.calmC, lineWidth: 1.6 * s)
+                .frame(width: 7 * s, height: 7 * s)
         case .noData:
             Circle()
-                .strokeBorder(Tokens.calmC, style: StrokeStyle(lineWidth: 1.4, dash: [2, 2]))
-                .frame(width: 7, height: 7)
+                .strokeBorder(Tokens.calmC,
+                              style: StrokeStyle(lineWidth: 1.4 * s, dash: [2 * s, 2 * s]))
+                .frame(width: 7 * s, height: 7 * s)
         default:
             if input.isMany {
                 // Stacked dots, worst in front. Laid out left-to-right in
@@ -72,15 +85,15 @@ struct PillAvatar: View {
                 ZStack(alignment: .leading) {
                     ForEach(Array(stackColors.enumerated()), id: \.offset) { i, c in
                         Circle().fill(c)
-                            .frame(width: 8, height: 8)
-                            .overlay(Circle().strokeBorder(Tokens.groundC, lineWidth: 1.5))
-                            .offset(x: CGFloat(i) * 3.5)
+                            .frame(width: 8 * s, height: 8 * s)
+                            .overlay(Circle().strokeBorder(Tokens.groundC, lineWidth: 1.5 * s))
+                            .offset(x: CGFloat(i) * 3.5 * s)
                     }
                 }
-                .frame(width: 8 + CGFloat(max(0, stackColors.count - 1)) * 3.5,
+                .frame(width: (8 + CGFloat(max(0, stackColors.count - 1)) * 3.5) * s,
                        alignment: .leading)
             } else {
-                Circle().fill(input.state.color).frame(width: 8, height: 8)
+                Circle().fill(input.state.color).frame(width: 8 * s, height: 8 * s)
             }
         }
     }

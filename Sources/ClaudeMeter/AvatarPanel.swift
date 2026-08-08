@@ -66,7 +66,10 @@ final class AvatarPanel: NSPanel {
         }
 
         // Style, scale and the collection-behaviour toggles all change the
-        // window itself, not just its contents.
+        // window itself, not just its contents. objectWillChange fires in
+        // willSet, so the property is still the old one here; the hop onto the
+        // next main-actor turn is what makes the new value readable, and
+        // resizeToFit() forces the layout itself once it gets there.
         settingsObserver = settings.objectWillChange.sink { [weak self] _ in
             Task { @MainActor in
                 self?.applySettings()
@@ -125,18 +128,52 @@ final class AvatarPanel: NSPanel {
 
     /// The pill grows with its text and the creatures do not, so the window is
     /// sized from what the view actually wants rather than from a constant.
+    ///
+    /// The layout pass is not optional. This runs one main-actor turn after
+    /// the setting changed, and SwiftUI schedules its own re-evaluation of the
+    /// body independently, so reading `fittingSize` on arrival describes
+    /// whichever style the hosting view was last laid out for. With the
+    /// settings window open that was measured as the *previous* style on every
+    /// switch — 84×84 asked for the pill, 232×52.5 asked for the face.
+    ///
+    /// Forcing the layout here also collapses the resize and the first draw of
+    /// the new style into the same turn, which is what stops the new artwork
+    /// being painted into a box still sized for the old one and then having
+    /// the window resized around it.
     private func resizeToFit() {
+        host.needsLayout = true
+        host.layoutSubtreeIfNeeded()
         let fitted = host.fittingSize
         guard fitted.width > 1, fitted.height > 1 else { return }
-        guard abs(fitted.width - frame.width) > 0.5
-                || abs(fitted.height - frame.height) > 0.5 else { return }
-        // Keep the top-left corner planted: growing downward from where the
-        // user parked it is less surprising than growing from the origin.
-        let top = frame.maxY
-        setFrame(NSRect(x: frame.minX, y: top - fitted.height,
-                        width: fitted.width, height: fitted.height),
-                 display: true)
+        if abs(fitted.width - frame.width) > 0.5
+            || abs(fitted.height - frame.height) > 0.5 {
+            // Keep the top-left corner planted: growing downward from where the
+            // user parked it is less surprising than growing from the origin.
+            let top = frame.maxY
+            setFrame(NSRect(x: frame.minX, y: top - fitted.height,
+                            width: fitted.width, height: fitted.height),
+                     display: true)
+        }
+        // Both of these are outside the size test on purpose. Laying the
+        // hosting view out above lets AppKit size the window to its new
+        // intrinsic size before this point, which leaves the branch above with
+        // nothing left to do — but the panel has still changed size, so it can
+        // still be hanging off an edge and it still has stale pixels to lose.
         clampOnScreen()
+        repaintContents()
+    }
+
+    /// Repaints the whole content area after a resize.
+    ///
+    /// The window is borderless with a clear background and `isOpaque` off, so
+    /// there is no opaque backing to cover what the previous style left in the
+    /// area a resize exposes. Redrawing the whole rect costs one pass over a
+    /// sprite a couple of hundred points across, which is cheap next to a
+    /// corner of the old artwork surviving the swap.
+    private func repaintContents() {
+        host.setNeedsDisplay(host.bounds)
+        viewsNeedDisplay = true
+        displayIfNeeded()
     }
 
     /// Growing downward can push the panel under the bottom edge. Nudge it

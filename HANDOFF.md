@@ -155,15 +155,17 @@ Two things are worth knowing before changing any of it:
   outright", which is exactly what the preview wants while its slider sweeps
   and what `--render-grid` needs to capture a settled frame.
 
-Two deliberate deviations, both from following the animated reference over the
-prose:
+Deliberate deviations, from following the animated reference over the prose:
 
 - The `z` glyphs drift 6 **pt**, not 6 units. §2 says units; the reference moves
   them 6 pt, and 18 pt would slice the small `z` on the top edge of the tile
   while it is still 30% opaque.
-- The falling sweat pixel is not drawn at all when motion is off. Frozen at the
-  top of its fall it reads as a third sweat pixel next to the two the anatomy
-  specifies, and those two are what the still frame is meant to show.
+- **Strained has no sweat at all.** The anatomy puts two grey pixels off the
+  upper-right shoulder and §2 drops a third past them; detached from the
+  silhouette on a dark desktop they read as stuck pixels, and the user asked for
+  them gone. Strained still has three cues — the squashed pose, the brows, the
+  tint — and it is now the one escalation state with no cycle of its own, which
+  is why `cycleSteps` groups it with stale, no-data and empty.
 
 The still sheet is the check that matters: `--render-grid` output is
 byte-identical to `docs/avatar-states.png` from before the change, so no state's
@@ -195,6 +197,10 @@ reps each, in a fixed synthetic state (`scratchpad/bench.sh`):
 | strained | 2.0% | 6.7% | 6.5 |
 | empty / stale / no data | 1.9% | 1.9% | 1 |
 
+The strained row is from before its sweat was removed. It has no cycle left, so
+it now belongs on the last row at one redraw a second; that has not been
+re-measured.
+
 **Do not read a single measurement.** Identical work costs between 5 and 15 ms
 per redraw depending on where macOS parks the process; the same strained build
 measured 6.7% on an idle machine and 13.4% twenty minutes later under load,
@@ -210,6 +216,152 @@ Nothing inside a style can move that number: the levers are the per-redraw cost
 itself (the planned baseline work) or fewer steps than §2 asks for. Worth noting
 if that trade comes up: the spec's own Interactions section says "only critical
 may animate continuously", which §2 then contradicts state by state.
+
+## The creature codes on a laptop
+
+From §2b of the design handoff and `pixel-coding-anim.jsx`. A flourish on top of
+calm and focused, not a state: nothing in `SnapshotStore`, `MeterState` or
+`AvatarInput` knows it exists, and it never starts while a pose morph is still
+running. `PixelCoding` owns the whole thing, `CodingFrame` is one frame of it,
+and `drawLaptop` paints it over the creature — over, because on the way out the
+laptop crosses the body, which is what sells it being pulled from behind.
+
+**When it plays is arithmetic, not a die roll.** The view is a struct rebuilt on
+every frame and `@State` does not compile here, so a remembered roll is not
+available. Time is cut into 75 s windows and the start offset inside each is
+hashed from the window's index with splitmix64's finaliser; a third of windows
+come back quiet. Any two draws at the same instant agree, and the sequence
+survives every re-render. Sampled over 41 consecutive windows it gives gaps of
+44 s at the shortest, about 110 s on average and 358 s at the longest — a run
+every couple of minutes, which is occasional rather than metronomic. Offsets are
+clamped so a run can never straddle a window, which keeps "is one playing?" a
+single lookup.
+
+**Reduce motion skips the flourish entirely.** §2b says to freeze on a static
+typing frame, which is right for a reference composition playing on a page and
+wrong here: a creature stuck mid-typing forever on someone's desktop is worse
+than one that never types. `input.animates == false` means no laptop, and
+because the offscreen renderers set it, the still sheet is unaffected — verified
+byte-identical, not assumed.
+
+Two things worth knowing before touching it:
+
+- **A finished run has to stay on the schedule for a moment.** The schedule
+  names the current frame by the newest boundary at or before now, which is only
+  correct while every cycle that could have moved since is listed. Dropping a
+  run's boundaries the instant it ended left the bob's as the newest — up to
+  0.9 s old — and the sprite redrew a frame from the middle of the run it had
+  just finished, putting the laptop back on screen for half a second. Found by
+  photographing a run frame by frame, not by reading the code. `PixelCoding
+  .lookback` is the fix and has to outlast the slowest idle cycle.
+- **The code bars must be gone before the lid moves**, or they spill out of the
+  shrinking screen — the regression §2b calls out. `bars` is zero unless
+  `typing`, and typing stops 75 ms before the lid's first step. Measured at
+  170 ms of clearance in a captured run.
+
+Timings, measured off a captured run (offscreen renders, ~18 fps, elapsed
+seconds from the run's start):
+
+| phase | expected | measured |
+|---|---|---|
+| laptop slides out, 5 steps | 0 → 0.7 s | base y 5.44 → 6.11 → 6.89 → 7.56 → 8.22 u, ending 8.2 |
+| lid grows, 5 steps | 0.8 → 1.6 s | 0.44 (shut) → 0.78 → 1.78 → 2.67 → 3.56 → 4.44 u |
+| screen appears past 60% open | — | at lid 3.56 of 4.44 |
+| code lines, one at a time | 2.0 → 5.0 s | 1 bar at 2.04, then 2.76, 3.27, 3.78, 4.31; widths 1.8/2.8/3.8/1.8/2.8 u, 0.62 u apart, blue-green-tan |
+| cursor blink | every 0.4 s | 8 transitions across the typing phase |
+| arms hammer, 0.14 s, half a beat apart | — | both at 2.67 or 3.89 u, differing in 22 of 47 typing frames |
+| bars clear | before the lid moves | last bars 4.946, lid first shrinks 5.116 |
+| lid folds, 4 steps | 5.0 → 5.6 s | 4.44 → 3.33 → 2.22 → 1.00 → 0.44 u |
+| laptop away, 4 steps | 5.7 → 6.3 s | base y 8.22 → 7.33 → 6.44 → 5.67 → gone at 6.28 |
+| idle bob resumes | after the fold | arms back to 1.56/2.0 on the 0.9 s toggle |
+
+Redraw cost, counted inside the app in a fixed synthetic focused state:
+**3.28 redraws/s idle** — mean of 37 five-second buckets, unchanged from before
+the flourish, because the instant list is empty between runs — against **15.2
+redraws/s at the peak of a run**, which is the hands at 0.14 s alternating. A
+run is about 76 redraws over 6.3 s. What that costs in CPU was not measured.
+
+## Windows: measuring, repainting, and dismissing
+
+### A hosting view measures the style it was last laid out for
+
+`AvatarPanel.resizeToFit()` reads `host.fittingSize` to decide how big the
+window should be. It runs one main-actor turn after a setting changed, because
+`objectWillChange` fires in `willSet` and the new value is not readable yet —
+but SwiftUI schedules its own re-evaluation of the body independently of that
+hop, so on arrival `fittingSize` still described the *previous* style. Traced,
+with the settings window open, on every single switch:
+
+```
+switching to pill           fitting=84.0x84.0     (the creature it was leaving)
+switching to pixelCreature  fitting=232.0x52.5    (the pill it was leaving)
+switching to face           fitting=232.0x52.5
+```
+
+`host.needsLayout = true; host.layoutSubtreeIfNeeded()` before the measurement
+fixes it, and every style then measures its own size with the top edge staying
+planted. Forcing the layout also collapses the resize and the first draw of the
+new artwork into one turn, which is the reasoned — not observed — fix for the
+debris a user reported in the corner of the pill: new art painted into a box
+still sized for the old style, in a borderless window with no opaque backing to
+cover what a resize exposes. `repaintContents()` is belt and braces for the same
+thing.
+
+**AppKit was already sizing the window** from the hosting view's intrinsic
+content size, so the `setFrame` branch almost never ran — and `clampOnScreen()`
+sat inside it, which means the "pull it back on screen after growing" this file
+has claimed since the panel was written had never actually run on a style
+change. Clamp and repaint are outside the size test now.
+
+### Settings closes when you click away
+
+An `.accessory` app is not in the activation order, so a settings window it
+leaves open sits on top of whatever you moved on to. `SettingsWindowController`
+is an `NSWindowDelegate` and closes in `windowDidResignKey`. Three details, each
+of which cost a trace:
+
+- **The decision is deferred one runloop turn.** The reset confirmation is a
+  sheet, and a sheet takes key from the window it is attached to — but
+  `attachedSheet` is not populated yet at the moment the parent resigns, so
+  testing it inside the notification sees nothing. One turn later it is set.
+- **Both `isKeyWindow` and `NSApp.keyWindow` are checked**, because they
+  disagree mid-transition. Showing the window fired a resign-key that landed
+  while AppKit already regarded it as the application's key window —
+  `isKeyWindow` false, `NSApp.keyWindow` pointing at this very window, eight
+  milliseconds after it appeared. Acting on that reading closed Settings the
+  instant it opened.
+- **`--open-settings` opts out** via `closesWhenDeactivated`. The shell that is
+  about to photograph the window takes focus back, which would shut it before
+  the shutter.
+
+Closing rather than hiding is safe only because `isReleasedWhenClosed` is off:
+the `NSWindow` survives and `show()` puts the same instance back with its pane,
+frame and preview intact. Knock that flag out and the second open crashes.
+
+Consequence worth knowing: opening the menubar or avatar popover while Settings
+is open now closes Settings, because the popover takes key.
+
+### The pill scales itself; everything else is magnified
+
+`scaleEffect` is right for artwork on a pixel grid and wrong for type — it
+rasterises 11 pt text and resamples it, so at the default 190% the pill's
+numbers came out soft. `AvatarStyleID.scalesItself` marks the pill, which takes
+the factor as a multiplier on its own metrics and asks for the font at its final
+size; `ScaledAvatar` then drops both the layout multiplier and the transform to
+1 for it, so the scale is never applied twice. Every constant in `PillAvatar` is
+a multiple of `s` for that reason — add an unscaled one and the pill grows out
+of proportion at any scale but 100%.
+
+### The state sheet must not depend on your system theme
+
+`RenderGrid.run` pins `NSApp.appearance` to `.aqua`. The menubar mark is an
+AppKit template image tinted against the process appearance, so before this the
+same code produced a different sheet in dark mode and "diff it against the
+committed PNG" was a coin toss. Two consecutive renders are now byte-identical.
+
+Style order in `AvatarStyleID` is the order of both the picker grid and the rows
+on that sheet, so changing it re-renders `docs/avatar-states.png`. The pixel
+creature leads because it is the default.
 
 ## Gotchas
 

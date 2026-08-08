@@ -225,6 +225,13 @@ final class MenubarController {
         settingsWindow.show()
     }
 
+    /// Debug affordance for the same screenshot path: the settings window
+    /// normally closes as soon as it stops being key, which would shut it the
+    /// moment focus goes back to the shell that is about to photograph it.
+    func keepSettingsOpenWhileScreenshotting() {
+        settingsWindow.closesWhenDeactivated = false
+    }
+
     // MARK: - Menu actions
 
     @objc private func toggleAvatarMenu() { toggleAvatar() }

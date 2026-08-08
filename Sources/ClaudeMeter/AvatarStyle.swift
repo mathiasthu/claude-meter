@@ -5,11 +5,15 @@ import SwiftUI
 /// An enum rather than a protocol with associated views: styles need to be
 /// persisted by name, enumerated in the picker, and switched on at one call
 /// site. Adding a style is a case, a size, and a view — nothing else changes.
+/// Order matters twice over: it is the order of the picker grid and of the
+/// rows on the state sheet. The pixel creature leads because it is the
+/// default, and a picker whose first tile is not the one you are looking at
+/// reads as though something else is selected.
 enum AvatarStyleID: String, CaseIterable, Identifiable {
-    case face
-    case pill
     case pixelCreature
     case blobCreature
+    case face
+    case pill
 
     var id: String { rawValue }
 
@@ -46,11 +50,17 @@ enum AvatarStyleID: String, CaseIterable, Identifiable {
         }
     }
 
+    /// True for styles that take the user's scale as a multiplier on their own
+    /// metrics instead of being magnified after the fact. Only the pill, which
+    /// is type: magnifying rendered text resamples it and goes soft, while
+    /// magnifying artwork on a pixel grid is exactly what you want.
+    var scalesItself: Bool { self == .pill }
+
     @ViewBuilder
-    func view(_ input: AvatarInput) -> some View {
+    func view(_ input: AvatarInput, scale: CGFloat = 1) -> some View {
         switch self {
         case .face:          FaceAvatar(input: input)
-        case .pill:          PillAvatar(input: input)
+        case .pill:          PillAvatar(input: input, scale: scale)
         case .pixelCreature: PixelCreatureAvatar(input: input)
         case .blobCreature:  BlobCreatureAvatar(input: input)
         }
@@ -196,14 +206,18 @@ struct ScaledAvatar: View {
     var opacity: Double = 1
 
     var body: some View {
-        ScaledLayout(scale: scale) {
-            style.view(input)
+        // A style that scales itself already reports its final size and needs
+        // no magnification, so both the layout multiplier and the transform
+        // drop to 1 for it rather than being applied twice.
+        let magnifies = !style.scalesItself
+        ScaledLayout(scale: magnifies ? scale : 1) {
+            style.view(input, scale: scale)
                 // Without a plate behind it the art has to hold its own edge
                 // against pale wallpaper. A shadow follows the silhouette,
                 // which is the whole reason it beats a card.
                 .shadow(color: .black.opacity(input.showsBackground ? 0 : 0.45),
-                        radius: 2.5, x: 0, y: 1)
-                .scaleEffect(scale)
+                        radius: 2.5 * (magnifies ? 1 : scale), x: 0, y: magnifies ? 1 : scale)
+                .scaleEffect(magnifies ? scale : 1)
         }
         .opacity(opacity)
         .fixedSize()
