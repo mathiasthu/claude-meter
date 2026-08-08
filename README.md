@@ -125,14 +125,21 @@ ring, or question-mark eyes. Stale data keeps its last value but drains to grey
 and carries a clock, and countdowns are replaced by an age — a countdown implies
 the number beside it is live.
 
+**Click the avatar** for the same breakdown the menubar shows, anchored to
+wherever you have parked it. Drag it to move — a press under 3 pt counts as a
+click, anything more moves the window, so neither gets in the other's way.
+Hover for a compact version in a tooltip.
+
 Left-click the menubar item for the full breakdown: both account windows with
 reset countdowns, then every session with its own context bar, token count, and
 cost. Past four sessions the rest collapse into one row that still surfaces the
 worst context fill. Right-click for show/hide avatar, reset position, Settings,
 reveal snapshots, and quit.
 
-Drag the avatar anywhere; its position is remembered, and it is placed back on
-screen automatically if the display it was on goes away.
+The avatar's position is remembered, and it is placed back on screen
+automatically if the display it was on goes away. With **Ignore mouse clicks**
+on, clicks pass through to whatever is underneath — which also means no click
+to open and no dragging; move it from the menubar's *Reset avatar position*.
 
 ## Settings
 

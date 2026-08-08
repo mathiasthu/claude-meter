@@ -22,7 +22,8 @@ final class AvatarPanel: NSPanel {
     private var host: NSHostingView<AvatarHost>!
 
     init(store: SnapshotStore, settings: SettingsStore = .shared,
-         onClose: @escaping () -> Void) {
+         onClose: @escaping () -> Void,
+         onClick: @escaping () -> Void = {}) {
         self.settings = settings
         super.init(
             contentRect: NSRect(origin: .zero, size: settings.styleID.naturalSize),
@@ -40,14 +41,19 @@ final class AvatarPanel: NSPanel {
         // Each style draws its own ground, so the window must not add a second
         // one behind it.
         hasShadow = false
-        // Drag from anywhere on the card; there is no title bar to grab.
-        isMovableByWindowBackground = true
+        // Dragging is handled by the hosting view, which has to tell a drag
+        // apart from a click. isMovableByWindowBackground would swallow the
+        // press before that decision could be made.
+        isMovableByWindowBackground = false
         hidesOnDeactivate = false
         becomesKeyOnlyIfNeeded = true
         isReleasedWhenClosed = false
 
         host = NSHostingView(rootView: AvatarHost(
-            store: store, settings: settings, ui: ui, onClose: onClose))
+            store: store, settings: settings, ui: ui,
+            onClose: onClose,
+            onClick: onClick,
+            onDrag: { [weak self] dx, dy in self?.moveBy(dx: dx, dy: dy) }))
         contentView = host
 
         applySettings()
@@ -74,6 +80,13 @@ final class AvatarPanel: NSPanel {
         if let moveObserver {
             NotificationCenter.default.removeObserver(moveObserver)
         }
+    }
+
+    /// Moves the panel by a screen-space delta, and remembers where it landed.
+    /// Not clamped mid-drag — the user is allowed to park it half off an edge
+    /// if they want; only automatic resizes get pulled back.
+    private func moveBy(dx: CGFloat, dy: CGFloat) {
+        setFrameOrigin(NSPoint(x: frame.origin.x + dx, y: frame.origin.y + dy))
     }
 
     /// Never becomes key: typing always goes to the app underneath.

@@ -12,6 +12,19 @@ import AppKit
 @MainActor
 final class AvatarUIState: ObservableObject {
     @Published var hovering = false
+
+    /// Drag bookkeeping, so a click can be told apart from a drag.
+    ///
+    /// Tracked in screen coordinates via `NSEvent.mouseLocation` rather than
+    /// the gesture's own translation: the window moves under the cursor while
+    /// dragging, which makes view-relative translation fight itself.
+    var lastMouse: NSPoint?
+    var dragDistance: CGFloat = 0
+
+    /// Below this a press counts as a click, not a drag. Small enough that a
+    /// deliberate nudge still moves the avatar, large enough to survive the
+    /// wobble in a normal click.
+    static let clickSlop: CGFloat = 3
 }
 
 /// What the floating panel actually hosts: whichever style the user picked,
@@ -24,12 +37,42 @@ struct AvatarHost: View {
     @ObservedObject var settings: SettingsStore
     @ObservedObject var ui: AvatarUIState
     var onClose: () -> Void = {}
+    /// Called on a press that did not turn into a drag.
+    var onClick: () -> Void = {}
+    /// Called with a screen-space delta while dragging.
+    var onDrag: (CGFloat, CGFloat) -> Void = { _, _ in }
 
     var body: some View {
         ScaledAvatar(style: settings.styleID,
                      input: store.avatarInput,
                      scale: settings.scale,
                      opacity: settings.opacity)
+            // minimumDistance 0 so the press is tracked from the first event;
+            // whether it was a click or a drag is decided on release.
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        let now = NSEvent.mouseLocation
+                        if let last = ui.lastMouse {
+                            let dx = now.x - last.x, dy = now.y - last.y
+                            ui.dragDistance += hypot(dx, dy)
+                            // Only actually move once past the slop, so a click
+                            // never nudges the avatar a pixel sideways.
+                            if ui.dragDistance >= AvatarUIState.clickSlop {
+                                onDrag(dx, dy)
+                            }
+                        } else {
+                            ui.dragDistance = 0
+                        }
+                        ui.lastMouse = now
+                    }
+                    .onEnded { _ in
+                        let wasClick = ui.dragDistance < AvatarUIState.clickSlop
+                        ui.lastMouse = nil
+                        ui.dragDistance = 0
+                        if wasClick { onClick() }
+                    }
+            )
             .overlay(alignment: .topTrailing) {
                 if ui.hovering && !settings.ignoreMouse {
                     Button(action: onClose) {
@@ -46,7 +89,8 @@ struct AvatarHost: View {
             .help(tooltip)
     }
 
-    /// The numbers the compact styles cannot show, one hover away.
+    /// The numbers the compact styles cannot show, one hover away. Clicking
+    /// opens the full panel; this is the glance version.
     private var tooltip: String {
         var lines: [String] = [store.state.headline]
         if let five = store.fiveHour {
@@ -63,6 +107,7 @@ struct AvatarHost: View {
         if let age = store.newestAge, age >= Snapshot.Liveness.live {
             lines.append("Last update \(Fmt.age(age)) ago")
         }
+        lines.append("Click for details · drag to move")
         return lines.joined(separator: "\n")
     }
 }

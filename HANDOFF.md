@@ -142,6 +142,31 @@ Screenshotted live on 2026-08-08, after screen recording came back:
   and fall through to that path. Now falls back to `NSScreen.screens.first`, and
   `resizeToFit()` clamps the frame back on screen after growing.
 
+## Clicking the avatar
+
+Opens the same `SessionListView` the menubar does, in a second `NSPopover`
+anchored to the panel's content view.
+
+Two things make this less obvious than it sounds:
+
+- **The app has to be activated first.** The avatar lives in a
+  `.nonactivatingPanel`, so clicking it does not make the app active, and a
+  `.transient` popover owned by an inactive app dismisses itself immediately.
+  `toggleAvatarPopover()` calls `NSApp.activate(ignoringOtherApps:)` — fine
+  here because it is an explicit click, unlike merely showing the avatar.
+- **Click and drag share the press.** `isMovableByWindowBackground` is off
+  because it swallows the press before a click could be recognised. A
+  `DragGesture(minimumDistance: 0)` tracks `NSEvent.mouseLocation` in screen
+  coordinates — not the gesture's own translation, which fights itself once the
+  window starts moving under the cursor — and accumulates distance. Under 3 pt
+  on release is a click; past that it moves the window and suppresses the click.
+
+Verified with `--open-avatar-popover`, which opens it at launch without
+promoting the activation policy, so it exercises the real `.accessory` path.
+The click/drag split itself is logic-only — it has not been driven with a real
+mouse, because synthetic clicks need Accessibility permission this machine does
+not grant.
+
 ## Known legibility limits without a plate
 
 - The blob creature's calm and no-data states are the dormant grey, which
@@ -180,6 +205,7 @@ launchctl kickstart -k gui/$UID/com.momentumminds.claude-meter   # restart the a
 ./dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --render-grid /tmp/s.png  # every style, every state
 ./dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --render-ui /tmp/ui.png   # popover at 0/3/10 sessions
 ./.build/release/ClaudeMeter --open-settings --settings-pane thresholds &   # real window, for a screenshot
+./.build/release/ClaudeMeter --open-avatar-popover &                       # avatar's popover, real .accessory path
 
 echo '{...}' | bin/claude-meter-collect                    # exercise the collector
 jq . ~/.local/state/claude-meter/last-raw.json             # what Claude Code last sent

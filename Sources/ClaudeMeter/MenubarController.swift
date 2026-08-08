@@ -11,6 +11,10 @@ final class MenubarController {
     private let store: SnapshotStore
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
+    /// A second popover anchored to the floating avatar. Separate from the
+    /// menubar one so both can be open independently and neither steals the
+    /// other's anchor view.
+    private let avatarPopover = NSPopover()
     private let settingsWindow: SettingsWindowController
     private var avatar: AvatarPanel?
     private var cancellables: Set<AnyCancellable> = []
@@ -24,6 +28,7 @@ final class MenubarController {
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
         popover.behavior = .transient
+        avatarPopover.behavior = .transient
 
         // The store republishes on file changes and once a second; settings
         // change what the title shows. The title has to follow all three.
@@ -163,14 +168,18 @@ final class MenubarController {
     private func toggleAvatar() {
         settings.avatarVisible.toggle()
         if popover.isShown { popover.performClose(nil) }
+        if avatarPopover.isShown { avatarPopover.performClose(nil) }
     }
 
     private func showAvatar() {
         if avatar == nil {
-            avatar = AvatarPanel(store: store, settings: settings) { [weak self] in
-                // The card's own close button: hide, and remember that.
-                self?.settings.avatarVisible = false
-            }
+            avatar = AvatarPanel(
+                store: store, settings: settings,
+                onClose: { [weak self] in
+                    // The card's own close button: hide, and remember that.
+                    self?.settings.avatarVisible = false
+                },
+                onClick: { [weak self] in self?.toggleAvatarPopover() })
         }
         // orderFrontRegardless, not makeKeyAndOrderFront: showing the widget
         // must not steal focus from the terminal you are working in.
@@ -178,7 +187,37 @@ final class MenubarController {
     }
 
     private func hideAvatar() {
+        if avatarPopover.isShown { avatarPopover.performClose(nil) }
         avatar?.orderOut(nil)
+    }
+
+    /// Clicking the avatar opens the same breakdown the menubar shows.
+    ///
+    /// The app has to be activated first: the avatar lives in a
+    /// `.nonactivatingPanel`, so clicking it does not make the app active, and
+    /// a `.transient` popover belonging to an inactive app dismisses itself
+    /// immediately. This is an explicit click, so taking focus is expected.
+    func toggleAvatarPopover() {
+        guard let anchor = avatar?.contentView else { return }
+        if avatarPopover.isShown {
+            avatarPopover.performClose(nil)
+            return
+        }
+        avatarPopover.contentViewController = NSHostingController(
+            rootView: SessionListView(
+                store: store,
+                settings: settings,
+                onToggleAvatar: { [weak self] in self?.toggleAvatar() },
+                onOpenSettings: { [weak self] in self?.openSettings() },
+                onQuit: { NSApp.terminate(nil) }
+            )
+        )
+        store.reload()
+        NSApp.activate(ignoringOtherApps: true)
+        // The hosting view is flipped, so .minY is the visual bottom edge.
+        // AppKit flips it automatically when the avatar is parked low.
+        avatarPopover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+        avatarPopover.contentViewController?.view.window?.makeKey()
     }
 
     /// Also called at launch by `--open-settings`, which exists so the window
