@@ -2,16 +2,21 @@
 
 ## State: working, installed, running
 
-Built 2026-08-07, visual system implemented 2026-08-08. Menubar app + floating
-avatar + status line HUD, all live. `com.momentumminds.claude-meter` LaunchAgent
-loaded, `RunAtLoad` + `KeepAlive`.
+Built 2026-08-07; visual system, click-to-open and the plateless avatar landed
+2026-08-08. Menubar item + floating avatar + settings window + status line HUD,
+all live. `com.momentumminds.claude-meter` LaunchAgent loaded, `RunAtLoad` +
+`KeepAlive`, deployed from `dist/ClaudeMeter.app`.
+
+Everything is on `master` at `github.com/mathiasthu/claude-meter` (public,
+source-available — see LICENSE). Deploying is `./install.sh`: it rebuilds the
+bundle, re-signs it, re-asserts the status line chain, and reloads the agent.
 
 Verified against real payloads, not synthetic ones:
 
 - Collector: 8 payload shapes (full, no `rate_limits`, null percentages,
   elapsed reset, 1M context, empty stdin, malformed stdin, path-unsafe
   session_id). Runs in ~50 ms against a 3 s chain deadline.
-- Store, settings and styles: `scripts/selftest.sh`, 35 assertions, all pass.
+- Store, settings and styles: `scripts/selftest.sh`, 36 assertions, all pass.
 - Decode: real snapshots from two concurrent sessions decode with correct
   names, percentages, token counts, costs, and reset countdowns.
 - Every style in every state: rendered to `docs/avatar-states.png` and looked
@@ -19,6 +24,14 @@ Verified against real payloads, not synthetic ones:
   clipped, and `ScaledAvatar` force-framed every style to `naturalSize`, which
   cut off the pill (it grows with its text). `ScaledLayout` now reports the real
   intrinsic size.
+
+### What is not covered by any test
+
+- The click-versus-drag split on the avatar. Logic-only; synthetic clicks need
+  Accessibility permission this machine does not grant. `AvatarUIState.clickSlop`
+  (3 pt) is the one knob if it ever mis-fires.
+- Anything about how the app behaves over time — the panel surviving a display
+  change, the popover under a Space switch, the LaunchAgent after a reboot.
 
 ## Design provenance
 
@@ -122,6 +135,8 @@ Screenshotted live on 2026-08-08, after screen recording came back:
   resolving differently (this was the open question — `environment(\.colorScheme:)`
   does work inside a live `NSHostingView`), sweep slider, exception chips, the
   3-column style grid, and the Thresholds pane's steppers.
+- The avatar's popover, opened through the real `.accessory` path: account
+  windows with countdowns, four session rows, the overflow row, and the footer.
 - The default window height was 560 pt, which cut the Avatar pane's last two
   rows below the fold. Now 720 pt; the minimum stays at the spec's 640×520.
 - `docs/settings-avatar.png` and `docs/settings-thresholds.png` are those
