@@ -11,11 +11,12 @@ let sessions = tmp.appendingPathComponent("sessions")
 try? FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
 setenv("CLAUDE_METER_STATE", tmp.path, 1)
 
-func write(_ id: String, ctx: Double?, five: Double?, agoSeconds: Double = 0) {
+func write(_ id: String, ctx: Double?, five: Double?, agoSeconds: Double = 0,
+           fiveResetsIn: Double = 3600) {
     let ts = Date().timeIntervalSince1970 - agoSeconds
     let ctxJSON = ctx.map { "\($0)" } ?? "null"
     let rl = five.map {
-        "{\"five_hour\":{\"used_percentage\":\($0),\"resets_at\":\(ts + 3600)},\"seven_day\":{\"used_percentage\":10,\"resets_at\":\(ts + 90000)}}"
+        "{\"five_hour\":{\"used_percentage\":\($0),\"resets_at\":\(ts + fiveResetsIn)},\"seven_day\":{\"used_percentage\":10,\"resets_at\":\(ts + 90000)}}"
     } ?? "null"
     let json = """
     {"ts":\(ts),"session_id":"\(id)","session_name":"\(id)","cwd":"/tmp/\(id)","model":"Opus","effort":"high","fast_mode":false,
@@ -88,6 +89,49 @@ MainActor.assumeIsolated {
     check("old snapshot not live", store.liveSessions.isEmpty, "live=\(store.liveSessions.count)")
     check("no live sessions -> asleep", store.state == .asleep, "\(store.state)")
     check("old snapshot still listed", store.sessions.count == 1, "\(store.sessions.count)")
+
+    // --- a window past its reset reads zero, not its last value ---
+    //
+    // The status line stops firing when you stop working, so the newest
+    // snapshot can predate the rollover by hours. Reporting the number it
+    // carries would greet you with the previous window's ceiling.
+    for f in (try? FileManager.default.contentsOfDirectory(at: sessions, includingPropertiesForKeys: nil)) ?? [] {
+        try? FileManager.default.removeItem(at: f)
+    }
+    write("live", ctx: 10, five: 88, fiveResetsIn: 1800)
+    store.reload()
+    check("window still open keeps its value", store.fiveHour == 88,
+          "\(String(describing: store.fiveHour))")
+    check("window still open is not reset", store.fiveHourHasReset == false)
+    check("state critical from 5h 88", store.state == .critical, "\(store.state)")
+
+    write("live", ctx: 10, five: 88, fiveResetsIn: -60)
+    store.reload()
+    check("elapsed window reads 0", store.fiveHour == 0,
+          "\(String(describing: store.fiveHour))")
+    check("elapsed window reports hasReset", store.fiveHourHasReset)
+    check("elapsed window calms the state", store.state == .calm, "\(store.state)")
+    check("elapsed window keeps its resets_at for the age line",
+          store.fiveHourResetsAt != nil)
+    check("the 7-day window is untouched by the 5-hour rollover",
+          store.sevenDay == 10 && store.sevenDayHasReset == false,
+          "\(String(describing: store.sevenDay))")
+
+    // Absence is not zero, and never becomes zero by expiring.
+    write("nolimits", ctx: 10, five: nil)
+    for f in (try? FileManager.default.contentsOfDirectory(at: sessions, includingPropertiesForKeys: nil)) ?? [] where f.lastPathComponent == "live.json" {
+        try? FileManager.default.removeItem(at: f)
+    }
+    store.reload()
+    check("no rate limits stays nil, not 0", store.fiveHour == nil,
+          "\(String(describing: store.fiveHour))")
+    check("no rate limits is not a reset", store.fiveHourHasReset == false)
+
+    for f in (try? FileManager.default.contentsOfDirectory(at: sessions, includingPropertiesForKeys: nil)) ?? [] {
+        try? FileManager.default.removeItem(at: f)
+    }
+    write("old", ctx: 40, five: 40, agoSeconds: 400)
+    store.reload()
 
     write("veryold", ctx: 40, five: 40, agoSeconds: 7200) // > 60 min
     store.reload()

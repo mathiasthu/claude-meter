@@ -30,7 +30,9 @@ Two consequences worth knowing:
   session start, new assistant messages, `/compact`, and permission/vim mode
   changes. With no session open there is no new data, so the avatar sleeps and
   shows the age of what it last saw rather than pretending a stale number is
-  current.
+  current. The exception is a rate-limit window that has passed its reset:
+  those roll on a clock, so once `resets_at` is behind us the window reads 0%
+  and says when it cleared, rather than holding the previous window's number.
 - **`rate_limits` needs a Claude.ai subscription and one API response.** It is
   absent for Console billing, and absent in a brand new session until the first
   reply comes back. The UI shows "no limit data yet" rather than 0%.
@@ -128,7 +130,7 @@ the 5-hour window or context alone.
 | Calm | under 50% |
 | Focused | 50–70% |
 | Strained | 70–85% |
-| Critical | 85% and up — the only state that animates |
+| Critical | 85% and up |
 | Asleep | no session active in the last 5 minutes |
 | Stale | data over an hour old |
 | No data | rate limits have never arrived |
@@ -140,9 +142,16 @@ for busy wallpaper; the styles draw one either way for the `empty` state, where
 a dashed outline is the entire message.
 
 Thresholds are editable. Critical is never colour alone — each style adds a
-geometric cue (badge, warning triangle, airborne pose, ring), so escalation
-survives colour-vision deficiency and greyscale. Animation respects the system
-Reduce Motion setting, and every animated state has a legible still frame.
+geometric cue (badge, warning triangle, wide white eyes, ring), so escalation
+survives colour-vision deficiency and greyscale.
+
+The pixel creature moves in every state rather than only in critical: it bobs,
+blinks, takes its sunglasses off on the way from calm to focused, shakes when
+critical, breathes while asleep, and steps between poses in whole pixels. Every
+minute or two while calm or focused it also pulls out a laptop and types for a
+few seconds. Animation respects the system Reduce Motion setting — with it on,
+every cycle freezes at its rest frame, state changes are instant, and the
+laptop never appears.
 
 Absence is never drawn as zero: a missing metric gets a dashed track, hollow
 ring, or question-mark eyes. Stale data keeps its last value but drains to grey

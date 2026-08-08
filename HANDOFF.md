@@ -363,6 +363,33 @@ Style order in `AvatarStyleID` is the order of both the picker grid and the rows
 on that sheet, so changing it re-renders `docs/avatar-states.png`. The pixel
 creature leads because it is the default.
 
+## A rate-limit window is only true until it resets
+
+`SnapshotStore.fiveHour` and `.sevenDay` no longer return whatever the newest
+snapshot happened to carry. Both windows roll, every snapshot carries its
+`resets_at`, and the status line stops firing the moment you stop working — so
+the newest snapshot routinely predates the rollover by hours. Before this, you
+could close the laptop at 5h 88% and be met the next morning by a critical
+avatar and an 88% menubar for a window that had emptied overnight.
+
+Past `resets_at` the reading is zero. That flows through `drivingPercentage`,
+so the state calms on its own, and through the menubar title and every style
+without any of them knowing about it.
+
+Two rules the tests pin down, because both are easy to break later:
+
+- **Absent never becomes zero.** A window with no percentage stays nil, which
+  is what draws the dashed track rather than an empty bar. Only a window that
+  has a percentage *and* a `resets_at` in the past collapses.
+- **Zero is current even when the snapshot is not.** `SessionListView.trailing`
+  checks the reset before the staleness branch, so the row reads "0% · reset 8h
+  ago" rather than "0% · 8h ago". The second phrasing implies the number is old
+  when it is the only reading on screen that is definitely right.
+
+`hasReset` is exposed separately from the value for exactly that label; nothing
+should re-derive it by testing the percentage against zero, since a genuinely
+empty window and a rolled-over one are not the same thing.
+
 ## Gotchas
 
 - **`@State` does not compile on this machine.** SwiftUI's macro plugin
@@ -555,13 +582,6 @@ order, because each one unblocks the next:
   change once a minute; and `popover.contentViewController` is never cleared on
   close, so both hosting controllers keep rebuilding invisibly — that last one
   is the permanent step from ~1.7% to ~4.6% after the first popover open.
-- **Treat an elapsed rate-limit window as reset.** `SnapshotStore` reads the
-  percentage off the newest snapshot with no expiry check, so hours after a
-  window provably emptied the app still shows its last value in grey. Every
-  snapshot already carries `resets_at`; the only place it meets `now` is
-  `Format.swift:37-40`, where it merely suppresses a countdown. Best
-  value-per-hour item on this list — no new data, no new storage, and it turns
-  the moment the tool is least useful into the moment it is most useful.
 - **Keep one line of history.** A `{ts, five_hour_pct, resets_at}` append to a
   `history.jsonl` after the snapshot write, trimmed by the same sweep, is the
   entire data dependency for burn rate and for "will this run die halfway" —

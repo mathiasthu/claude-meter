@@ -37,8 +37,10 @@ struct SessionListView: View {
     private var limits: some View {
         if store.accountLimits != nil {
             VStack(alignment: .leading, spacing: 8) {
-                window("5-hour window", store.fiveHour, store.fiveHourResetsAt)
-                window("7-day window", store.sevenDay, store.sevenDayResetsAt)
+                window("5-hour window", store.fiveHour, store.fiveHourResetsAt,
+                       hasReset: store.fiveHourHasReset)
+                window("7-day window", store.sevenDay, store.sevenDayResetsAt,
+                       hasReset: store.sevenDayHasReset)
             }
             // Old data is dimmed wholesale rather than relabelled per row.
             .opacity(store.state == .stale || store.state == .asleep ? 0.55 : 1)
@@ -55,13 +57,14 @@ struct SessionListView: View {
         }
     }
 
-    private func window(_ title: String, _ pct: Double?, _ resetsAt: Double?) -> some View {
+    private func window(_ title: String, _ pct: Double?, _ resetsAt: Double?,
+                        hasReset: Bool) -> some View {
         let dormant = store.state == .stale || store.state == .asleep
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Text(title).font(Typo.ui(12, .semibold))
                 Spacer(minLength: 6)
-                Text(trailing(pct, resetsAt))
+                Text(trailing(pct, resetsAt, hasReset))
                     .font(Typo.mono(11))
                     .foregroundStyle(.secondary)
             }
@@ -69,8 +72,18 @@ struct SessionListView: View {
         }
     }
 
-    private func trailing(_ pct: Double?, _ resetsAt: Double?) -> String {
+    private func trailing(_ pct: Double?, _ resetsAt: Double?, _ hasReset: Bool) -> String {
         guard let pct else { return "—" }
+        // A window past its reset is empty, and this is checked before the
+        // staleness branch on purpose: the zero is current even when the
+        // snapshot it came from is not. Labelling it "0% · 8h ago" would read
+        // as an old number when in fact it is the only reading here that is
+        // definitely right.
+        if hasReset {
+            guard let at = resetsAt else { return Fmt.percent(0) }
+            let ago = Date().timeIntervalSince1970 - at
+            return "\(Fmt.percent(0)) · reset \(Fmt.age(ago)) ago"
+        }
         // Stale data gets its age, never a countdown: a countdown implies the
         // number beside it is current.
         if store.state == .stale || store.state == .asleep {

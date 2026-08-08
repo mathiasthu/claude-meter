@@ -92,10 +92,41 @@ final class SnapshotStore: ObservableObject {
         sessions.filter { $0.age < settings.thresholds.asleepAfter }
     }
 
-    var fiveHour: Double? { accountLimits?.limits.fiveHour?.usedPercentage }
-    var sevenDay: Double? { accountLimits?.limits.sevenDay?.usedPercentage }
+    var fiveHour: Double? { Self.current(accountLimits?.limits.fiveHour) }
+    var sevenDay: Double? { Self.current(accountLimits?.limits.sevenDay) }
     var fiveHourResetsAt: Double? { accountLimits?.limits.fiveHour?.resetsAt }
     var sevenDayResetsAt: Double? { accountLimits?.limits.sevenDay?.resetsAt }
+
+    /// Whether the last percentage we saw belongs to a window that has since
+    /// rolled over. Surfaces use it to say "reset 2h ago" instead of printing a
+    /// countdown to a moment that has already been and gone.
+    var fiveHourHasReset: Bool { Self.hasReset(accountLimits?.limits.fiveHour) }
+    var sevenDayHasReset: Bool { Self.hasReset(accountLimits?.limits.sevenDay) }
+
+    /// What a rate-limit window reads *now*, rather than when it was last
+    /// reported.
+    ///
+    /// The status line only fires while a session is working, so the newest
+    /// snapshot can be hours old — and both windows are rolling, so a snapshot
+    /// taken before `resets_at` describes a window that no longer exists. The
+    /// app used to keep showing that number in grey indefinitely: close the
+    /// laptop at 5h 88%, come back the next morning, and it still said 88% when
+    /// the window had emptied overnight. Past `resets_at` the honest reading is
+    /// zero, which also means the state that greets you is calm rather than
+    /// critical.
+    ///
+    /// Absent stays absent. A window with no percentage is "no data", and a
+    /// window with no `resets_at` cannot be shown to have expired, so both pass
+    /// through untouched.
+    private static func current(_ w: Snapshot.RateLimits.Window?) -> Double? {
+        guard let w, let pct = w.usedPercentage else { return nil }
+        return hasReset(w) ? 0 : pct
+    }
+
+    private static func hasReset(_ w: Snapshot.RateLimits.Window?) -> Bool {
+        guard let w, w.usedPercentage != nil, let resets = w.resetsAt else { return false }
+        return resets <= Date().timeIntervalSince1970
+    }
 
     /// The fullest live session -- the one that will need /compact first.
     var worstContext: Double? {
