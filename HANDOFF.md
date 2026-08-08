@@ -3,9 +3,14 @@
 ## State: working, installed, running
 
 Built 2026-08-07; visual system, click-to-open and the plateless avatar landed
-2026-08-08. Menubar item + floating avatar + settings window + status line HUD,
-all live. `com.momentumminds.claude-meter` LaunchAgent loaded, `RunAtLoad` +
-`KeepAlive`, deployed from `dist/ClaudeMeter.app`.
+2026-08-08, followed the same day by the installer rewrite and the animated
+pixel creature. Menubar item + floating avatar + settings window + status line
+HUD, all live. `com.momentumminds.claude-meter` LaunchAgent loaded, `RunAtLoad`
++ `KeepAlive`, deployed from `dist/ClaudeMeter.app`.
+
+Up to 2026-08-08 the only machine this had ever worked on was this one. The
+installer rewrite below is the first work aimed at someone else being able to
+run it; the rest of that list is in Next steps.
 
 Everything is on `master` at `github.com/mathiasthu/claude-meter` (public,
 source-available — see LICENSE). Deploying is `./install.sh`: it rebuilds the
