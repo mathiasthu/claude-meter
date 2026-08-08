@@ -23,6 +23,19 @@ MainActor.assumeIsolated {
         exit(ok ? 0 : 1)
     }
 
+    // Same idea for the two surfaces you would otherwise have to click to see.
+    if let i = args.firstIndex(of: "--render-ui") {
+        guard i + 1 < args.count else {
+            FileHandle.standardError.write(Data("usage: --render-ui <path.png>\n".utf8))
+            exit(2)
+        }
+        let app = NSApplication.shared
+        app.setActivationPolicy(.prohibited)
+        let ok = RenderUI.run(to: args[i + 1])
+        print(ok ? "wrote \(args[i + 1])" : "render failed")
+        exit(ok ? 0 : 1)
+    }
+
     let app = NSApplication.shared
     // .accessory keeps ClaudeMeter out of the Dock and Cmd+Tab -- the menubar
     // item and the floating avatar are the only surfaces it has.

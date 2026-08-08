@@ -67,10 +67,18 @@ final class SettingsWindowController {
         self.settings = settings
     }
 
+    /// Debug affordance for screenshots: open straight to a named pane.
+    func select(pane name: String) {
+        if let p = SettingsUIState.Pane(rawValue: name) { ui.pane = p }
+    }
+
     func show() {
         if window == nil {
+            // Tall enough that the Avatar pane — preview strip, style grid and
+            // five rows — fits without scrolling, since it is the pane people
+            // actually open. The minimum is the spec's 640×520.
             let w = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 720, height: 560),
+                contentRect: NSRect(x: 0, y: 0, width: 720, height: 720),
                 styleMask: [.titled, .closable, .resizable, .miniaturizable],
                 backing: .buffered, defer: false)
             w.title = "claude-meter Settings"

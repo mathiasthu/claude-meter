@@ -132,19 +132,35 @@ screen automatically if the display it was on goes away.
 
 ## Settings
 
-Five panes — Avatar, State source, Thresholds, Menubar, Behaviour — with a live
-preview pinned above all of them. The preview has a sweep slider that drags the
-selected style through the whole escalation and chips that force the states you
-cannot reach on demand (asleep, stale, no data, empty, many sessions).
+![Settings, Avatar pane](docs/settings-avatar.png)
 
-To review the whole set without opening the app:
+Five panes — Avatar, State source, Thresholds, Menubar, Behaviour — with a live
+preview pinned above all of them, because thresholds and the state source change
+what the avatar shows and a preview you have to navigate back to is a preview
+nobody uses. The sweep slider drags the selected style through the whole
+escalation, and the chips force the states you cannot reach on demand: asleep,
+stale, no data, empty, many sessions.
+
+Thresholds re-order themselves rather than refusing an edit — raising Focused
+past Strained pushes Strained up — and the preview strip re-colours its track to
+the edited boundaries immediately.
+
+### Reviewing it without clicking
 
 ```bash
-./dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --render-grid states.png
+# every style in every state, light over dark
+ClaudeMeter --render-grid states.png
+
+# the popover at none / three / ten sessions
+ClaudeMeter --render-ui ui.png
+
+# the real settings window, for a screenshot
+ClaudeMeter --open-settings --settings-pane thresholds
 ```
 
-That renders every style in every state, light over dark, offscreen — no
-screen-recording permission needed.
+The two render modes draw offscreen through `ImageRenderer`, so they need no
+screen-recording permission. They cannot draw `ScrollView` content or
+AppKit-backed controls, so the settings panes need the real window.
 
 ## Uninstall
 

@@ -181,8 +181,12 @@ final class MenubarController {
         avatar?.orderOut(nil)
     }
 
-    private func openSettings() {
+    /// Also called at launch by `--open-settings`, which exists so the window
+    /// can be screenshotted without clicking the status item — a status item
+    /// cannot be clicked programmatically without Accessibility permission.
+    func openSettings(pane: String? = nil) {
         if popover.isShown { popover.performClose(nil) }
+        if let pane { settingsWindow.select(pane: pane) }
         settingsWindow.show()
     }
 

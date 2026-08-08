@@ -80,12 +80,22 @@ updating to display them.
 - **Hooks survive kickbacks rewrites.** Observed directly: kickbacks rewrote
   `spinnerVerbs` in settings.json while the `hooks` block was untouched. It
   only claims `statusLine` and `spinnerVerbs`.
-- **Screen recording is denied to the terminal**, so `screencapture` fails with
-  "could not create image from display". Do not burn time on it. Use
-  `--render-grid` instead: `ImageRenderer` draws offscreen and needs no
-  permission, which is how the avatars actually got reviewed. What it cannot
-  show is the live window — panel placement, the settings window's real
-  controls, and anything about how it behaves on screen are still unverified.
+- **Screen recording works again after a reboot** (it was denied before, and
+  `screencapture` failed with "could not create image from display"). If it
+  breaks again, `--render-grid` and `--render-ui` render offscreen through
+  `ImageRenderer` and need no permission.
+- **`ImageRenderer` cannot draw everything.** `ScrollView` and `LazyVGrid`
+  content comes out blank, and AppKit-backed controls (`Slider`, `Stepper`,
+  `.buttonStyle(.link)`) render as a placeholder block. So `--render-ui` is
+  trustworthy for the popover and useless for the settings panes — use
+  `--open-settings` and a real screenshot for those.
+- **A status item cannot be clicked programmatically** without Accessibility
+  permission, which `osascript` does not have here ("osascript is not allowed
+  assistive access"). Hence `--open-settings [--settings-pane <name>]`, which
+  opens the window at launch. It also flips the activation policy to `.regular`,
+  because an `.accessory` app launched from a background shell cannot raise a
+  window above the frontmost app. Run it as a second instance, screenshot, kill
+  it — it adds a second menubar item for those few seconds.
 - **`@State`'s absence spreads.** `@AppStorage` and `@StateObject` are macros in
   the same plugin, so neither is available either. `SettingsStore` is a plain
   `ObservableObject` over `UserDefaults`, and every view-local piece of state
@@ -100,16 +110,33 @@ updating to display them.
   would double-launch it. The Behaviour pane detects the plist and shows the
   toggle on and disabled with an explanation.
 
+## Verified on screen
+
+Screenshotted live on 2026-08-08, after screen recording came back:
+
+- Menubar mark renders with its stem, arc clockwise from the top, text
+  "5h 8% · 4h51m". Calm's arc is deliberately low-contrast.
+- The floating pixel creature sits on its translucent squircle and reads over
+  both a dark editor panel and wallpaper.
+- Settings window: sidebar, the pinned preview strip with both appearances
+  resolving differently (this was the open question — `environment(\.colorScheme:)`
+  does work inside a live `NSHostingView`), sweep slider, exception chips, the
+  3-column style grid, and the Thresholds pane's steppers.
+- The default window height was 560 pt, which cut the Avatar pane's last two
+  rows below the fold. Now 720 pt; the minimum stays at the spec's 640×520.
+- `docs/settings-avatar.png` and `docs/settings-thresholds.png` are those
+  screenshots.
+
 ## Next steps
 
-- Look at the running app: panel placement and size, the settings window's
-  layout, and whether the default (pixel creature at 100%) is the right one.
-  `docs/avatar-states.png` covers the art; none of the live behaviour is covered.
-- The preview strip forces light and dark with `environment(\.colorScheme:)`.
-  That resolves the dynamic `NSColor` tokens correctly in the offscreen render;
-  whether it also does inside a live `NSHostingView` is unconfirmed. If both
-  halves look identical, that is why — the fix is an explicit `NSAppearance` on
-  a hosting view per half.
+- Decide whether the pixel creature sits too high in its ground. Content spans
+  y 6–31.5 in a 48 pt box, so there is 6 pt above and 16.5 pt below. It is
+  faithful to the spec's coordinates, which is why it was left alone; shifting
+  it down ~5 pt would centre it.
+- Calm and focused are hard to tell apart on the pixel creature at 1× — the
+  sunglasses bar and the two eye squares occupy nearly the same footprint. It
+  reads correctly when enlarged. Worth a wider or differently-shaped visor if
+  it turns out to matter in use.
 - The 24 h snapshot sweep in the collector is the only cleanup for sessions
   that die without firing `SessionEnd` (a `kill -9`, a crashed terminal). If
   ghost sessions linger in the popover, shorten `MAX_AGE_MIN`.
@@ -126,7 +153,9 @@ updating to display them.
 ./scripts/selftest.sh        # 19 headless assertions
 launchctl kickstart -k gui/$UID/com.momentumminds.claude-meter   # restart the app
 
-./dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --render-grid /tmp/s.png  # review every state
+./dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --render-grid /tmp/s.png  # every style, every state
+./dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --render-ui /tmp/ui.png   # popover at 0/3/10 sessions
+./.build/release/ClaudeMeter --open-settings --settings-pane thresholds &   # real window, for a screenshot
 
 echo '{...}' | bin/claude-meter-collect                    # exercise the collector
 jq . ~/.local/state/claude-meter/last-raw.json             # what Claude Code last sent
