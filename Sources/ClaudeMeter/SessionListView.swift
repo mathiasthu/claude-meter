@@ -1,185 +1,208 @@
 import SwiftUI
 import AppKit
 
-/// The menubar popover: account-wide rate limits on top, then one row per
+/// The menubar dropdown: account-wide rate limits on top, then one row per
 /// session. Rate limits are shared across every session; context is not, which
 /// is the whole reason the sessions are listed separately.
 struct SessionListView: View {
     @ObservedObject var store: SnapshotStore
-    var avatarVisible: Bool
+    @ObservedObject var settings: SettingsStore
     var onToggleAvatar: () -> Void
+    var onOpenSettings: () -> Void
     var onQuit: () -> Void
 
+    /// Beyond this the list stops being scannable, so the rest collapse into
+    /// one row that still surfaces the number that matters.
+    private static let visibleSessions = 4
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider().padding(.vertical, 10)
-            limitsSection
-            Divider().padding(.vertical, 10)
-            sessionsSection
-            Divider().padding(.vertical, 10)
+        VStack(alignment: .leading, spacing: 10) {
+            limits
+            Divider()
+            sessionSection
+            Divider()
             footer
         }
-        .padding(14)
-        .frame(width: 330)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(width: 296)
+        // Redrawn on the store's one-second tick, so countdowns and ages stay
+        // honest with no file activity.
         .id(store.tick.timeIntervalSince1970.rounded())
     }
 
-    // MARK: - Header
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            Text(store.mood.face)
-                .font(.system(size: 15, weight: .medium, design: .monospaced))
-                .foregroundStyle(store.mood.color)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(store.mood.label)
-                    .font(.system(size: 12, weight: .semibold))
-                Text(subtitle)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-    }
-
-    private var subtitle: String {
-        let live = store.liveSessions.count
-        guard live > 0 else { return "nothing running" }
-        return live == 1 ? "1 live session" : "\(live) live sessions"
-    }
-
-    // MARK: - Rate limits
+    // MARK: - Account windows
 
     @ViewBuilder
-    private var limitsSection: some View {
-        if let (limits, asOf) = store.accountLimits {
-            VStack(alignment: .leading, spacing: 9) {
-                sectionLabel("ACCOUNT LIMITS")
-                window("5-hour", limits.fiveHour)
-                window("7-day", limits.sevenDay)
-                let age = Date().timeIntervalSince1970 - asOf
-                if age >= Snapshot.Liveness.live {
-                    Text("as of \(Fmt.age(age)) ago")
-                        .font(.system(size: 9.5))
-                        .foregroundStyle(.tertiary)
-                }
+    private var limits: some View {
+        if store.accountLimits != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                window("5-hour window", store.fiveHour, store.fiveHourResetsAt)
+                window("7-day window", store.sevenDay, store.sevenDayResetsAt)
             }
+            // Old data is dimmed wholesale rather than relabelled per row.
+            .opacity(store.state == .stale || store.state == .asleep ? 0.55 : 1)
         } else {
-            VStack(alignment: .leading, spacing: 4) {
-                sectionLabel("ACCOUNT LIMITS")
-                // Claude Code only sends rate_limits to Claude.ai subscribers,
-                // and only once a session has had an API response come back.
-                Text("No limit data yet — send a message in a session.")
-                    .font(.system(size: 10.5))
+            // Claude Code only sends rate limits to Claude.ai subscribers, and
+            // only once a session has had a response come back.
+            VStack(alignment: .leading, spacing: 3) {
+                Text("No limit data yet")
+                    .font(Typo.ui(12, .semibold))
+                Text("Send a message in a session to populate it.")
+                    .font(Typo.ui(11))
                     .foregroundStyle(.secondary)
             }
         }
     }
 
-    @ViewBuilder
-    private func window(_ title: String, _ w: Snapshot.RateLimits.Window?) -> some View {
-        let pct = w?.usedPercentage
-        VStack(alignment: .leading, spacing: 3) {
+    private func window(_ title: String, _ pct: Double?, _ resetsAt: Double?) -> some View {
+        let dormant = store.state == .stale || store.state == .asleep
+        return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                Text(title)
-                    .font(.system(size: 11, weight: .medium))
-                Spacer()
-                if let reset = Fmt.countdown(to: w?.resetsAt) {
-                    Text("resets \(reset)")
-                        .font(.system(size: 9.5))
-                        .foregroundStyle(.tertiary)
-                }
-                Text(Fmt.percent(pct))
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Palette.tint(for: pct))
+                Text(title).font(Typo.ui(12, .semibold))
+                Spacer(minLength: 6)
+                Text(trailing(pct, resetsAt))
+                    .font(Typo.mono(11))
+                    .foregroundStyle(.secondary)
             }
-            bar(pct)
+            bar(pct, color: dormant ? Tokens.calmC : AvatarInput.ramp(pct, settings.thresholds))
         }
+    }
+
+    private func trailing(_ pct: Double?, _ resetsAt: Double?) -> String {
+        guard let pct else { return "—" }
+        // Stale data gets its age, never a countdown: a countdown implies the
+        // number beside it is current.
+        if store.state == .stale || store.state == .asleep {
+            if let age = store.newestAge { return "\(Fmt.percent(pct)) · \(Fmt.age(age)) ago" }
+            return Fmt.percent(pct)
+        }
+        if let reset = Fmt.countdown(to: resetsAt, spaced: true) {
+            return "\(Fmt.percent(pct)) · resets \(reset)"
+        }
+        return Fmt.percent(pct)
     }
 
     // MARK: - Sessions
 
     @ViewBuilder
-    private var sessionsSection: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            sectionLabel("SESSIONS")
-            if store.sessions.isEmpty {
-                Text("No sessions publishing. Start Claude Code.")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(store.sessions, id: \.sessionId) { s in
-                    sessionRow(s)
-                }
+    private var sessionSection: some View {
+        let shown = Array(store.sessions.prefix(Self.visibleSessions))
+        let hidden = store.sessions.dropFirst(Self.visibleSessions)
+
+        if store.sessions.isEmpty {
+            Text("No active sessions")
+                .font(Typo.ui(12))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 2)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(shown, id: \.sessionId) { row($0) }
+                if !hidden.isEmpty { overflow(Array(hidden)) }
             }
         }
     }
 
-    private func sessionRow(_ s: Snapshot) -> some View {
+    private func row(_ s: Snapshot) -> some View {
         let pct = s.context.usedPercentage
+        let live = s.age < settings.thresholds.asleepAfter
         return VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(s.isLive ? Palette.green : Palette.dim)
-                    .frame(width: 5, height: 5)
+            HStack(spacing: 8) {
+                // Tails distinguish session names ("…site rebuild"), so they
+                // truncate in the middle; model names truncate at the tail.
                 Text(s.displayName)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(Typo.ui(12.5, .semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Spacer(minLength: 6)
-                Text(Fmt.percent(pct))
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Palette.tint(for: pct))
-            }
-            bar(pct)
-            HStack(spacing: 6) {
-                Text("\(Fmt.tokens(s.context.totalInputTokens))/\(Fmt.tokens(s.context.size))")
-                if let model = s.model { Text("·"); Text(model).lineLimit(1) }
                 Spacer(minLength: 4)
                 Text(Fmt.usd(s.cost.totalCostUsd))
-                if !s.isLive { Text("· \(Fmt.age(s.age))") }
+                    .font(Typo.mono(11))
+                    .fixedSize()
             }
-            .font(.system(size: 9.5, design: .monospaced))
+            bar(pct, color: sessionColor(pct))
+            HStack(spacing: 6) {
+                Text(s.model ?? "—")
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
+                Text("\(Fmt.tokenPair(s.context.totalInputTokens, s.context.size)) · \(Fmt.age(s.age))")
+                    .fixedSize()
+            }
+            .font(Typo.mono(10))
             .foregroundStyle(.tertiary)
         }
-        .opacity(s.isLive ? 1 : 0.55)
+        .opacity(live ? 1 : 0.55)
+    }
+
+    /// Sessions below the first threshold get a neutral grey rather than the
+    /// calm token: in a list, several coloured bars compete, and only the ones
+    /// worth noticing should have colour.
+    private func sessionColor(_ pct: Double?) -> Color {
+        guard let pct else { return Tokens.dormantC }
+        if pct < settings.thresholds.focused { return Color(nsColor: NSColor(hex: 0xB8B8BD)) }
+        return settings.thresholds.state(for: pct).color
+    }
+
+    private func overflow(_ rest: [Snapshot]) -> some View {
+        let worst = rest.compactMap { $0.context.usedPercentage }.max()
+        return HStack {
+            Text("▸ \(rest.count) more session\(rest.count == 1 ? "" : "s")")
+                .font(Typo.ui(12))
+            Spacer()
+            if let worst {
+                Text("worst \(Fmt.percent(worst))")
+                    .font(Typo.mono(10, .semibold))
+                    .foregroundColor(sessionColor(worst))
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
     }
 
     // MARK: - Footer
 
     private var footer: some View {
-        HStack(spacing: 12) {
-            Button(avatarVisible ? "Hide avatar" : "Show avatar", action: onToggleAvatar)
+        HStack(spacing: 10) {
+            Text(freshness)
+                .font(Typo.ui(11))
+                .foregroundStyle(.tertiary)
             Spacer()
+            Button(settings.avatarVisible ? "Hide avatar" : "Show avatar",
+                   action: onToggleAvatar)
+            Button("Settings…", action: onOpenSettings)
             Button("Quit", action: onQuit)
         }
         .buttonStyle(.link)
-        .font(.system(size: 11))
+        .font(Typo.ui(11))
+    }
+
+    private var freshness: String {
+        guard let age = store.newestAge else { return "No data yet" }
+        if store.liveSessions.isEmpty { return "⏱ last seen \(Fmt.age(age)) ago" }
+        return "Updated \(Fmt.age(age)) ago"
     }
 
     // MARK: - Bits
 
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 9, weight: .semibold))
-            .tracking(0.8)
-            .foregroundStyle(.tertiary)
-    }
-
-    /// A percentage bar that stays visible at 0% and reads as "unknown" when
-    /// the value is missing, rather than silently rendering as empty.
-    private func bar(_ pct: Double?) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(0.10))
-                if let pct {
-                    Capsule()
-                        .fill(Palette.tint(for: pct))
+    /// A percentage bar that reads as "unknown" when the value is missing —
+    /// a dashed empty track, never a 0% fill.
+    @ViewBuilder
+    private func bar(_ pct: Double?, color: Color) -> some View {
+        if let pct {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.07))
+                    Capsule().fill(color)
                         .frame(width: max(2, geo.size.width * min(1, pct / 100)))
                 }
             }
+            .frame(height: 5)
+        } else {
+            Capsule()
+                .strokeBorder(Tokens.dormantC, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                .frame(height: 5)
         }
-        .frame(height: 4)
     }
 }

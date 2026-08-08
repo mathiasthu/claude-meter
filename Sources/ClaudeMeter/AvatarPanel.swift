@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 /// The floating avatar window.
 ///
@@ -13,13 +14,18 @@ final class AvatarPanel: NSPanel {
     private static let originKey = "avatar.origin"
 
     private var moveObserver: AnyObject?
-    /// Held here so the card's hover/pulse state survives re-renders -- see
+    private var settingsObserver: AnyCancellable?
+    /// Held here so the card's hover state survives re-renders -- see
     /// AvatarUIState for why this is not `@State`.
     private let ui = AvatarUIState()
+    private let settings: SettingsStore
+    private var host: NSHostingView<AvatarHost>!
 
-    init(store: SnapshotStore, onClose: @escaping () -> Void) {
+    init(store: SnapshotStore, settings: SettingsStore = .shared,
+         onClose: @escaping () -> Void) {
+        self.settings = settings
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 156, height: 56),
+            contentRect: NSRect(origin: .zero, size: settings.styleID.naturalSize),
             // .borderless drops the title bar; .nonactivatingPanel is what
             // keeps clicks from stealing focus.
             styleMask: [.borderless, .nonactivatingPanel],
@@ -29,32 +35,38 @@ final class AvatarPanel: NSPanel {
 
         isFloatingPanel = true
         level = .floating
-        // Visible on every Space, and ignored by Mission Control's window
-        // shuffling -- it should feel pinned to the screen, not to a desktop.
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        // Each style draws its own ground, so the window must not add a second
+        // one behind it.
+        hasShadow = false
         // Drag from anywhere on the card; there is no title bar to grab.
         isMovableByWindowBackground = true
         hidesOnDeactivate = false
-        // Borderless panels cannot become key by default, and this one should
-        // not want to -- nothing in it takes text input.
         becomesKeyOnlyIfNeeded = true
         isReleasedWhenClosed = false
 
-        let host = NSHostingView(
-            rootView: AvatarFace(store: store, ui: ui, onClose: onClose))
-        host.frame = contentRect(forFrameRect: frame)
-        host.autoresizingMask = [.width, .height]
+        host = NSHostingView(rootView: AvatarHost(
+            store: store, settings: settings, ui: ui, onClose: onClose))
         contentView = host
 
+        applySettings()
+        resizeToFit()
         restorePosition()
 
         moveObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didMoveNotification, object: self, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.savePosition() }
+        }
+
+        // Style, scale and the collection-behaviour toggles all change the
+        // window itself, not just its contents.
+        settingsObserver = settings.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor in
+                self?.applySettings()
+                self?.resizeToFit()
+            }
         }
     }
 
@@ -67,6 +79,30 @@ final class AvatarPanel: NSPanel {
     /// Never becomes key: typing always goes to the app underneath.
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+
+    // MARK: - Settings
+
+    private func applySettings() {
+        ignoresMouseEvents = settings.ignoreMouse
+        var behavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .stationary]
+        if settings.floatOverFullScreen { behavior.insert(.fullScreenAuxiliary) }
+        collectionBehavior = behavior
+    }
+
+    /// The pill grows with its text and the creatures do not, so the window is
+    /// sized from what the view actually wants rather than from a constant.
+    private func resizeToFit() {
+        let fitted = host.fittingSize
+        guard fitted.width > 1, fitted.height > 1 else { return }
+        guard abs(fitted.width - frame.width) > 0.5
+                || abs(fitted.height - frame.height) > 0.5 else { return }
+        // Keep the top-left corner planted: growing downward from where the
+        // user parked it is less surprising than growing from the origin.
+        let top = frame.maxY
+        setFrame(NSRect(x: frame.minX, y: top - fitted.height,
+                        width: fitted.width, height: fitted.height),
+                 display: true)
+    }
 
     // MARK: - Position
 

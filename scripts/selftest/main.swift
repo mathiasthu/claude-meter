@@ -1,7 +1,8 @@
 import Foundation
 import AppKit
+import SwiftUI
 
-// Headless harness for SnapshotStore: verifies directory watching, mood
+// Headless harness for SnapshotStore: verifies directory watching, state
 // aggregation, liveness and staleness against files written at runtime.
 
 let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -42,9 +43,13 @@ func check(_ name: String, _ cond: Bool, _ detail: String = "") {
 }
 
 MainActor.assumeIsolated {
-    let store = SnapshotStore()
+    let settings = SettingsStore(defaults: UserDefaults(suiteName: "claude-meter-selftest-\(getpid())")!)
+    settings.resetToDefaults()
+    let store = SnapshotStore(settings: settings)
 
-    check("empty dir -> asleep", store.mood == .asleep, "\(store.mood)")
+    // No sessions at all is `empty`, not `asleep` — asleep means sessions
+    // exist but none of them are live.
+    check("empty dir -> empty", store.state == .empty, "\(store.state)")
 
     // --- watcher: written without calling reload() ---
     write("alpha", ctx: 30, five: 20)
@@ -54,20 +59,20 @@ MainActor.assumeIsolated {
         if store.sessions.count == 1 { picked = true; break }
     }
     check("directory watch picked up new file", picked, "sessions=\(store.sessions.count)")
-    check("mood calm at 30/20", store.mood == .calm, "\(store.mood)")
+    check("state calm at 30/20", store.state == .calm, "\(store.state)")
     check("worst = 30", store.worstPercentage == 30, "\(String(describing: store.worstPercentage))")
 
-    // --- context drives mood above rate limits ---
+    // --- context drives state above rate limits ---
     write("beta", ctx: 88, five: 20)
     store.reload()
     check("two sessions listed", store.sessions.count == 2, "\(store.sessions.count)")
-    check("mood alarmed from ctx 88", store.mood == .alarmed, "\(store.mood)")
+    check("state critical from ctx 88", store.state == .critical, "\(store.state)")
 
-    // --- rate limit drives mood above context ---
+    // --- rate limit drives state above context ---
     write("beta", ctx: 10, five: 20)
     write("gamma", ctx: 5, five: 74)
     store.reload()
-    check("mood sweating from 5h 74", store.mood == .sweating, "\(store.mood)")
+    check("state strained from 5h 74", store.state == .strained, "\(store.state)")
 
     // --- account limits come from the freshest snapshot ---
     check("accountLimits 5h == 74",
@@ -81,7 +86,7 @@ MainActor.assumeIsolated {
     write("old", ctx: 40, five: 40, agoSeconds: 400)   // > 5 min
     store.reload()
     check("old snapshot not live", store.liveSessions.isEmpty, "live=\(store.liveSessions.count)")
-    check("no live sessions -> asleep", store.mood == .asleep, "\(store.mood)")
+    check("no live sessions -> asleep", store.state == .asleep, "\(store.state)")
     check("old snapshot still listed", store.sessions.count == 1, "\(store.sessions.count)")
 
     write("veryold", ctx: 40, five: 40, agoSeconds: 7200) // > 60 min
@@ -96,7 +101,7 @@ MainActor.assumeIsolated {
     store.reload()
     check("decodes with rate_limits null", store.sessions.count == 1, "\(store.sessions.count)")
     check("accountLimits nil", store.accountLimits == nil)
-    check("mood still derived from ctx", store.mood == .focused, "\(store.mood)")
+    check("state still derived from ctx", store.state == .focused, "\(store.state)")
 
     // --- null context percentage (post-/compact) ---
     write("nullctx", ctx: nil, five: nil)
@@ -114,7 +119,7 @@ MainActor.assumeIsolated {
         if store.sessions.isEmpty { cleared = true; break }
     }
     check("deletion observed by watcher", cleared, "sessions=\(store.sessions.count)")
-    check("back to asleep", store.mood == .asleep, "\(store.mood)")
+    check("all deleted -> empty", store.state == .empty, "\(store.state)")
 
     // --- corrupt file must not take the store down ---
     try? "{ not json".write(to: sessions.appendingPathComponent("broken.json"),
@@ -122,6 +127,65 @@ MainActor.assumeIsolated {
     write("good", ctx: 10, five: 10)
     store.reload()
     check("corrupt file skipped, good file kept", store.sessions.count == 1, "\(store.sessions.count)")
+
+
+    // --- settings: defaults on a clean domain ---
+    let suite = "claude-meter-selftest-settings-\(getpid())"
+    let d1 = UserDefaults(suiteName: suite)!
+    d1.removePersistentDomain(forName: suite)
+    let s1 = SettingsStore(defaults: d1)
+    check("default style is pixel creature", s1.styleID == .pixelCreature, "\(s1.styleID)")
+    check("default thresholds 50/70/85",
+          s1.thresholds == Thresholds.default, "\(s1.thresholds)")
+    check("default scale is 1", s1.scale == 1.0, "\(s1.scale)")
+
+    // --- settings: persistence round-trip ---
+    s1.styleID = .pill
+    s1.scale = 1.4
+    s1.menubarMetric = .sevenDay
+    s1.thresholds.set(.critical, to: 90)
+    let s2 = SettingsStore(defaults: UserDefaults(suiteName: suite)!)
+    check("style persists", s2.styleID == .pill, "\(s2.styleID)")
+    check("scale persists", s2.scale == 1.4, "\(s2.scale)")
+    check("menubar metric persists", s2.menubarMetric == .sevenDay, "\(s2.menubarMetric)")
+    check("thresholds persist", s2.thresholds.critical == 90, "\(s2.thresholds.critical)")
+
+    // --- settings: thresholds stay ordered ---
+    var t = Thresholds.default
+    t.set(.focused, to: 95)
+    check("raising focused pushes strained up", t.strained >= 95, "\(t)")
+    check("raising focused pushes critical up", t.critical >= t.strained, "\(t)")
+    t = Thresholds.default
+    t.set(.critical, to: 20)
+    check("lowering critical pulls strained down", t.strained <= 20, "\(t)")
+    check("lowering critical pulls focused down", t.focused <= t.strained, "\(t)")
+    t = Thresholds.default
+    t.set(.focused, to: -30)
+    check("thresholds clamp at 0", t.focused == 0, "\(t.focused)")
+    t.set(.critical, to: 300)
+    check("thresholds clamp at 100", t.critical == 100, "\(t.critical)")
+
+    // --- settings: reset restores defaults ---
+    s1.resetToDefaults()
+    check("reset restores style", s1.styleID == .pixelCreature, "\(s1.styleID)")
+    check("reset restores thresholds", s1.thresholds == Thresholds.default, "\(s1.thresholds)")
+    d1.removePersistentDomain(forName: suite)
+
+    // --- every style renders every state without trapping ---
+    var rendered = 0
+    for style in AvatarStyleID.allCases {
+        for st in MeterState.allCases {
+            let input = AvatarInput(state: st, percentage: 62, fiveHour: 62,
+                                    fiveHourResetsAt: Date().timeIntervalSince1970 + 3600,
+                                    sevenDay: 38, context: 45,
+                                    sessions: [45, 20, 80], age: 30, motionAllowed: false)
+            _ = ImageRenderer(content: ScaledAvatar(style: style, input: input)).nsImage
+            rendered += 1
+        }
+    }
+    check("all styles render all states",
+          rendered == AvatarStyleID.allCases.count * MeterState.allCases.count,
+          "\(rendered) combinations")
 
     try? FileManager.default.removeItem(at: tmp)
     print(failures == 0 ? "\nALL PASS" : "\n\(failures) FAILED")

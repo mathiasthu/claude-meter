@@ -2,83 +2,102 @@ import AppKit
 import SwiftUI
 import Combine
 
-/// Owns the menubar item, the click popover, and the floating avatar.
-///
-/// The status item shows the 5-hour window, because that is the number you
-/// cannot do anything about once it runs out -- context can always be
-/// reclaimed with /compact.
+/// Owns the menubar item, the click popover, the settings window, and the
+/// floating avatar.
 @MainActor
 final class MenubarController {
 
-    private static let avatarVisibleKey = "avatar.visible"
-
-    private let store = SnapshotStore()
+    private let settings = SettingsStore.shared
+    private let store: SnapshotStore
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
+    private let settingsWindow: SettingsWindowController
     private var avatar: AvatarPanel?
     private var cancellables: Set<AnyCancellable> = []
 
-    private var avatarVisible: Bool {
-        get {
-            // Default to showing it: someone who launches this wants the widget.
-            UserDefaults.standard.object(forKey: Self.avatarVisibleKey) as? Bool ?? true
-        }
-        set { UserDefaults.standard.set(newValue, forKey: Self.avatarVisibleKey) }
-    }
-
     init() {
+        store = SnapshotStore(settings: settings)
+        settingsWindow = SettingsWindowController(settings: settings)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.target = self
         statusItem.button?.action = #selector(handleClick(_:))
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(
-            rootView: SessionListView(
-                store: store,
-                avatarVisible: avatarVisible,
-                onToggleAvatar: { [weak self] in self?.toggleAvatar() },
-                onQuit: { NSApp.terminate(nil) }
-            )
-        )
 
-        // The store republishes on every file change and once a second; the
-        // title has to follow both, so redraw on either.
+        // The store republishes on file changes and once a second; settings
+        // change what the title shows. The title has to follow all three.
         store.$sessions
             .combineLatest(store.$tick)
-            .sink { [weak self] _ in self?.refreshTitle() }
+            .sink { [weak self] _ in self?.refreshStatusItem() }
+            .store(in: &cancellables)
+        settings.objectWillChange
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.settingsChanged() }
+            }
             .store(in: &cancellables)
 
-        refreshTitle()
-        if avatarVisible { showAvatar() }
+        refreshStatusItem()
+        if settings.avatarVisible { showAvatar() }
     }
 
     // MARK: - Status item
 
-    private func refreshTitle() {
+    private func refreshStatusItem() {
         guard let button = statusItem.button else { return }
-        let pct = store.accountLimits?.limits.fiveHour?.usedPercentage
-        let text = "5h \(Fmt.percent(pct))"
+        let state = store.state
+        let value = store.menubarValue
 
-        // NSColor rather than the SwiftUI palette: the status item title is
-        // AppKit, and it needs to survive light/dark menubar backgrounds.
-        let color: NSColor = {
-            switch store.mood {
-            case .alarmed:  return .systemRed
-            case .sweating: return .systemOrange
-            case .asleep, .stale: return .tertiaryLabelColor
-            case .calm, .focused: return .labelColor
-            }
-        }()
+        button.image = settings.menubarDisplay.showsIcon
+            ? MenubarIcon.image(state: state, percentage: value,
+                                thresholds: settings.thresholds)
+            : nil
+        button.imagePosition = settings.menubarDisplay.showsText ? .imageLeading : .imageOnly
 
-        button.attributedTitle = NSAttributedString(
-            string: text,
-            attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
-                .foregroundColor: color,
-            ]
-        )
+        if settings.menubarDisplay.showsText {
+            button.attributedTitle = NSAttributedString(
+                string: " " + titleText(state: state, value: value),
+                attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
+                    .foregroundColor: titleColor(state),
+                ])
+        } else {
+            button.attributedTitle = NSAttributedString(string: "")
+        }
+        button.toolTip = state.headline
     }
+
+    /// Degrades from the right as data disappears:
+    /// "5h 62% · 3h07m" → "5h 62%" → "62%" → "—".
+    private func titleText(state: MeterState, value: Double?) -> String {
+        guard let value else { return "—" }
+        var s = ""
+        let prefix = settings.menubarMetric.prefix
+        if !prefix.isEmpty { s += prefix + " " }
+        s += Fmt.percent(value)
+        if state == .stale || state == .asleep {
+            // An age, never a countdown — a countdown implies the number
+            // beside it is live.
+            if let age = store.newestAge { s += " · \(Fmt.age(age)) ago" }
+        } else if settings.menubarCountdown,
+                  let reset = Fmt.countdown(to: store.menubarResetsAt) {
+            s += " · \(reset)"
+        }
+        return s
+    }
+
+    private func titleColor(_ state: MeterState) -> NSColor {
+        switch state {
+        case .critical: return .systemRed
+        case .strained: return .systemOrange
+        // Calm and focused stay in the menubar's own ink: colour here is for
+        // things worth looking at, and "fine" is not one of them.
+        case .calm, .focused: return .labelColor
+        default: return .tertiaryLabelColor
+        }
+    }
+
+    // MARK: - Clicks
 
     @objc private func handleClick(_ sender: NSStatusBarButton) {
         if NSApp.currentEvent?.type == .rightMouseUp {
@@ -93,13 +112,12 @@ final class MenubarController {
             popover.performClose(nil)
             return
         }
-        // Rebuild the root view so the footer's avatar label reflects the
-        // current state -- SessionListView takes it as a plain value.
         popover.contentViewController = NSHostingController(
             rootView: SessionListView(
                 store: store,
-                avatarVisible: avatarVisible,
+                settings: settings,
                 onToggleAvatar: { [weak self] in self?.toggleAvatar() },
+                onOpenSettings: { [weak self] in self?.openSettings() },
                 onQuit: { NSApp.terminate(nil) }
             )
         )
@@ -110,13 +128,16 @@ final class MenubarController {
 
     private func showMenu(_ sender: NSStatusBarButton) {
         let menu = NSMenu()
-        menu.addItem(withTitle: avatarVisible ? "Hide avatar" : "Show avatar",
+        menu.addItem(withTitle: settings.avatarVisible ? "Hide avatar" : "Show avatar",
                      action: #selector(toggleAvatarMenu), keyEquivalent: "")
             .target = self
         menu.addItem(withTitle: "Reset avatar position",
                      action: #selector(resetAvatarPosition), keyEquivalent: "")
             .target = self
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Settings…",
+                     action: #selector(openSettingsMenu), keyEquivalent: ",")
+            .target = self
         menu.addItem(withTitle: "Reveal snapshots in Finder",
                      action: #selector(revealState), keyEquivalent: "")
             .target = self
@@ -125,8 +146,8 @@ final class MenubarController {
                      action: #selector(quit), keyEquivalent: "q")
             .target = self
 
-        // menu(_:) would make the menu permanent on left-click too; showing it
-        // for this one event keeps left-click on the popover.
+        // Assigning `menu` permanently would take over left-click too; showing
+        // it for this one event keeps left-click on the popover.
         statusItem.menu = menu
         sender.performClick(nil)
         statusItem.menu = nil
@@ -134,18 +155,21 @@ final class MenubarController {
 
     // MARK: - Avatar
 
+    private func settingsChanged() {
+        refreshStatusItem()
+        if settings.avatarVisible { showAvatar() } else { hideAvatar() }
+    }
+
     private func toggleAvatar() {
-        avatarVisible.toggle()
-        if avatarVisible { showAvatar() } else { hideAvatar() }
+        settings.avatarVisible.toggle()
         if popover.isShown { popover.performClose(nil) }
     }
 
     private func showAvatar() {
         if avatar == nil {
-            avatar = AvatarPanel(store: store) { [weak self] in
+            avatar = AvatarPanel(store: store, settings: settings) { [weak self] in
                 // The card's own close button: hide, and remember that.
-                self?.avatarVisible = false
-                self?.hideAvatar()
+                self?.settings.avatarVisible = false
             }
         }
         // orderFrontRegardless, not makeKeyAndOrderFront: showing the widget
@@ -157,14 +181,20 @@ final class MenubarController {
         avatar?.orderOut(nil)
     }
 
+    private func openSettings() {
+        if popover.isShown { popover.performClose(nil) }
+        settingsWindow.show()
+    }
+
     // MARK: - Menu actions
 
     @objc private func toggleAvatarMenu() { toggleAvatar() }
+    @objc private func openSettingsMenu() { openSettings() }
 
     @objc private func resetAvatarPosition() {
-        avatar?.resetPosition()
-        if !avatarVisible { avatarVisible = true }
+        settings.avatarVisible = true
         showAvatar()
+        avatar?.resetPosition()
     }
 
     @objc private func revealState() {

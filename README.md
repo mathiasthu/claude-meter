@@ -85,27 +85,66 @@ Without kickbacks, point `statusLine.command` straight at
 
 ## Reading the avatar
 
-The face reflects `max(5h%, 7d%, worst live session context%)` — any one of the
-three filling up is worth reacting to.
+![Every style in every state](docs/avatar-states.png)
 
-| Face | State | Trigger |
+Four styles, switchable in Settings:
+
+| Style | Size | For |
 |---|---|---|
-| `◕‿◕` | calm | under 50% |
-| `◔_◔` | focused | 50–70% |
-| `◕﹏◕` | sweating | 70–85% |
-| `◉益◉` | alarmed (pulses) | 85% and up |
-| `-_-` | asleep | no session active in the last 5 minutes |
-| `?_?` | stale | live sessions but no usable numbers, or data over an hour old |
+| **Face** | 44×44 | A companion, not an instrument. Learn the expressions once and stop reading numbers. |
+| **Pill** | 128×30, grows | Maximum truth per pixel: worst metric, its number, its deadline, in one row. |
+| **Creature · pixel** | 48×48 | A blocky quadruped whose stance carries the state. Native next to a monospace prompt. |
+| **Creature · blob** | 48×48 | The soft-bodied original. Same pose grammar: works, sweats, panics, sleeps. |
 
-The pulse respects the system Reduce Motion setting.
+By default the state reflects `max(5h%, 7d%, worst live session context%)` — any
+one of the three filling up is worth reacting to. Settings can narrow that to
+the 5-hour window or context alone.
+
+| State | Trigger |
+|---|---|
+| Calm | under 50% |
+| Focused | 50–70% |
+| Strained | 70–85% |
+| Critical | 85% and up — the only state that animates |
+| Asleep | no session active in the last 5 minutes |
+| Stale | data over an hour old |
+| No data | rate limits have never arrived |
+| Empty | no sessions at all |
+
+Thresholds are editable. Critical is never colour alone — each style adds a
+geometric cue (badge, warning triangle, airborne pose, ring), so escalation
+survives colour-vision deficiency and greyscale. Animation respects the system
+Reduce Motion setting, and every animated state has a legible still frame.
+
+Absence is never drawn as zero: a missing metric gets a dashed track, hollow
+ring, or question-mark eyes. Stale data keeps its last value but drains to grey
+and carries a clock, and countdowns are replaced by an age — a countdown implies
+the number beside it is live.
 
 Left-click the menubar item for the full breakdown: both account windows with
 reset countdowns, then every session with its own context bar, token count, and
-cost. Right-click for show/hide avatar, reset avatar position, reveal snapshots,
-and quit.
+cost. Past four sessions the rest collapse into one row that still surfaces the
+worst context fill. Right-click for show/hide avatar, reset position, Settings,
+reveal snapshots, and quit.
 
 Drag the avatar anywhere; its position is remembered, and it is placed back on
 screen automatically if the display it was on goes away.
+
+## Settings
+
+Five panes — Avatar, State source, Thresholds, Menubar, Behaviour — with a live
+preview pinned above all of them. The preview has a sweep slider that drags the
+selected style through the whole escalation and chips that force the states you
+cannot reach on demand (asleep, stale, no data, empty, many sessions).
+
+To review the whole set without opening the app:
+
+```bash
+./dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --render-grid states.png
+```
+
+That renders every style in every state, light over dark, offscreen — no
+screen-recording permission needed.
 
 ## Uninstall
 

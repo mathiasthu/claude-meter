@@ -14,6 +14,10 @@ final class SnapshotStore: ObservableObject {
     /// Advances once a second so SwiftUI recomputes countdowns and staleness.
     @Published private(set) var tick: Date = Date()
 
+    /// Thresholds and the state-source choice live in settings; the store reads
+    /// them so every surface derives the same state from the same rules.
+    private let settings: SettingsStore
+
     static let stateDirectory: URL = {
         if let override = ProcessInfo.processInfo.environment["CLAUDE_METER_STATE"] {
             return URL(fileURLWithPath: override)
@@ -29,6 +33,7 @@ final class SnapshotStore: ObservableObject {
     private var watcher: DispatchSourceFileSystemObject?
     private var watchedFD: CInt = -1
     private var timer: Timer?
+    private var settingsObserver: AnyCancellable?
 
     private let decoder: JSONDecoder = {
         let d = JSONDecoder()
@@ -36,12 +41,18 @@ final class SnapshotStore: ObservableObject {
         return d
     }()
 
-    init() {
+    init(settings: SettingsStore = .shared) {
+        self.settings = settings
         try? FileManager.default.createDirectory(
             at: Self.sessionsDirectory, withIntermediateDirectories: true)
         reload()
         startWatching()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick = Date() }
+        }
+        // Editing a threshold changes the derived state without any file
+        // changing, so republish when settings do.
+        settingsObserver = settings.objectWillChange.sink { [weak self] _ in
             Task { @MainActor in self?.tick = Date() }
         }
     }
@@ -66,28 +77,78 @@ final class SnapshotStore: ObservableObject {
         return nil
     }
 
-    var liveSessions: [Snapshot] { sessions.filter(\.isLive) }
-
-    /// Drives the avatar's expression. Any one of the three filling up is
-    /// worth reacting to: the 5h and 7d windows throttle the account, and a
-    /// full context window stops the session you are actually working in.
-    var worstPercentage: Double? {
-        var candidates: [Double] = []
-        if let rl = accountLimits?.limits {
-            if let v = rl.fiveHour?.usedPercentage { candidates.append(v) }
-            if let v = rl.sevenDay?.usedPercentage { candidates.append(v) }
-        }
-        candidates.append(contentsOf: liveSessions.compactMap { $0.context.usedPercentage })
-        return candidates.max()
+    var liveSessions: [Snapshot] {
+        sessions.filter { $0.age < settings.thresholds.asleepAfter }
     }
 
-    var mood: Mood {
-        guard !liveSessions.isEmpty else { return .asleep }
-        // Live sessions but no usable numbers yet (fresh session, or a
-        // non-subscriber who never receives rate_limits at all).
-        guard let worst = worstPercentage else { return .stale }
-        if sessions.allSatisfy(\.isStale) { return .stale }
-        return Mood(percentage: worst)
+    var fiveHour: Double? { accountLimits?.limits.fiveHour?.usedPercentage }
+    var sevenDay: Double? { accountLimits?.limits.sevenDay?.usedPercentage }
+    var fiveHourResetsAt: Double? { accountLimits?.limits.fiveHour?.resetsAt }
+    var sevenDayResetsAt: Double? { accountLimits?.limits.sevenDay?.resetsAt }
+
+    /// The fullest live session -- the one that will need /compact first.
+    var worstContext: Double? {
+        liveSessions.compactMap { $0.context.usedPercentage }.max()
+    }
+
+    /// Seconds since the freshest snapshot, or nil when there are none.
+    var newestAge: TimeInterval? { sessions.map(\.age).min() }
+
+    /// The reading that escalates the avatar, per the user's state source.
+    var drivingPercentage: Double? {
+        switch settings.stateSource {
+        case .fiveHour: return fiveHour
+        case .context:  return worstContext
+        case .worst:    return [fiveHour, sevenDay, worstContext].compactMap { $0 }.max()
+        }
+    }
+
+    /// Kept for the older name used by callers that just want the worst number.
+    var worstPercentage: Double? { drivingPercentage }
+
+    /// The single state every surface renders from.
+    ///
+    /// Order matters: empty before asleep before stale before escalation, so a
+    /// number is only ever shown when it is both present and current.
+    var state: MeterState {
+        if sessions.isEmpty { return .empty }
+        if liveSessions.isEmpty { return .asleep }
+        if let age = newestAge, age >= Snapshot.Liveness.stale { return .stale }
+        guard let pct = drivingPercentage else { return .noData }
+        return settings.thresholds.state(for: pct)
+    }
+
+    /// Packaged for the avatar styles.
+    var avatarInput: AvatarInput {
+        AvatarInput(
+            state: state,
+            percentage: drivingPercentage,
+            fiveHour: fiveHour,
+            fiveHourResetsAt: fiveHourResetsAt,
+            sevenDay: sevenDay,
+            context: worstContext,
+            sessions: liveSessions.map { $0.context.usedPercentage },
+            age: newestAge,
+            motionAllowed: settings.motionAllowed
+        )
+    }
+
+    /// The value the menubar title shows, per the user's metric choice.
+    var menubarValue: Double? {
+        switch settings.menubarMetric {
+        case .worst:    return [fiveHour, sevenDay, worstContext].compactMap { $0 }.max()
+        case .fiveHour: return fiveHour
+        case .sevenDay: return sevenDay
+        case .context:  return worstContext
+        }
+    }
+
+    var menubarResetsAt: Double? {
+        switch settings.menubarMetric {
+        case .sevenDay: return sevenDayResetsAt
+        case .context:  return nil     // context has no reset
+        default:        return fiveHourResetsAt
+        }
     }
 
     // MARK: - Loading
