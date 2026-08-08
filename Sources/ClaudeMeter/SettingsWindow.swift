@@ -93,10 +93,23 @@ final class SettingsWindowController {
                 rootView: SettingsView(settings: settings, ui: ui))
             window = w
         }
+        recoverIfOffscreen()
         // The app is an .accessory agent, so it is not in the activation order.
         // Without this the window opens behind whatever is in front.
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// `setFrameAutosaveName` restores the last frame verbatim, including onto
+    /// a display that has since been unplugged — the saved frame records the
+    /// screen it belonged to, and AppKit does not check that it still exists.
+    /// Settings then opens somewhere unreachable and looks like it did nothing.
+    private func recoverIfOffscreen() {
+        guard let w = window else { return }
+        let onScreen = NSScreen.screens.contains { $0.visibleFrame.intersects(w.frame) }
+        guard !onScreen else { return }
+        w.setContentSize(NSSize(width: 720, height: 720))
+        w.center()
     }
 }
 

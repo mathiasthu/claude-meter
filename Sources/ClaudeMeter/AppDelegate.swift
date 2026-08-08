@@ -22,6 +22,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             controller.openSettings(pane: pane)
             NSApp.activate(ignoringOtherApps: true)
+            // Activation alone does not reliably win against whatever is
+            // frontmost when the launch came from a background shell, and the
+            // point of this path is to be photographable. Debug-only.
+            for w in NSApp.windows where w.title == "claude-meter Settings" {
+                w.level = .floating
+                w.orderFrontRegardless()
+            }
         }
         // Same reason: the avatar's popover cannot be opened by a synthetic
         // click either. This one deliberately does NOT promote the activation

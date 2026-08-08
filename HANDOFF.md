@@ -183,6 +183,18 @@ The click/drag split itself is logic-only — it has not been driven with a real
 mouse, because synthetic clicks need Accessibility permission this machine does
 not grant.
 
+## A saved window frame can point at a display that is gone
+
+`setFrameAutosaveName` restores the last frame verbatim, and the saved record
+includes the screen it belonged to — AppKit does not check that screen still
+exists. The settings window came back at `698 -863 720 748` on a screen
+`158 -1169 1800 1130`, i.e. entirely off the only display now attached, so
+opening Settings looked like it did nothing at all. `recoverIfOffscreen()`
+re-centres it when the restored frame intersects no screen.
+
+This is the same failure the avatar panel had, from a different direction.
+Anything that persists a position here needs the same check.
+
 ## Known legibility limits without a plate
 
 - The blob creature's calm and no-data states are the dormant grey, which
