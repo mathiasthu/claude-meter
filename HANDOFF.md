@@ -140,8 +140,8 @@ Screenshotted live on 2026-08-08, after screen recording came back:
   windows with countdowns, four session rows, the overflow row, and the footer.
 - The default window height was 560 pt, which cut the Avatar pane's last two
   rows below the fold. Now 720 pt; the minimum stays at the spec's 640×520.
-- `docs/settings-avatar.png` and `docs/settings-thresholds.png` are those
-  screenshots.
+- `docs/settings-avatar.png` is that screenshot, refreshed after the plate came
+  off and the Background plate row was added.
 
 ## Fixed after looking at it on screen
 
@@ -183,17 +183,25 @@ The click/drag split itself is logic-only — it has not been driven with a real
 mouse, because synthetic clicks need Accessibility permission this machine does
 not grant.
 
-## A saved window frame can point at a display that is gone
+## This machine has two displays — mind that when screenshotting
 
-`setFrameAutosaveName` restores the last frame verbatim, and the saved record
-includes the screen it belonged to — AppKit does not check that screen still
-exists. The settings window came back at `698 -863 720 748` on a screen
-`158 -1169 1800 1130`, i.e. entirely off the only display now attached, so
-opening Settings looked like it did nothing at all. `recoverIfOffscreen()`
-re-centres it when the restored frame intersects no screen.
+`screencapture -x out.png` captures the **main display only**. Here that is the
+4096×2304 external; the built-in Liquid Retina XDR is a second screen sitting
+below it in the global coordinate space (`158 -1169 1800 1130`). Negative y in a
+saved window frame means the built-in, not "off-screen".
 
-This is the same failure the avatar panel had, from a different direction.
-Anything that persists a position here needs the same check.
+This cost real time: the settings window kept appearing to open and do nothing,
+and it was diagnosed as a stale autosaved frame pointing at a disconnected
+display. It was not — the window was on the built-in the whole time, and the
+capture simply did not cover it. Use `screencapture -x -D 2 out.png` for the
+second display, and check `system_profiler SPDisplaysDataType` before concluding
+a window is lost.
+
+`SettingsWindowController.recoverIfOffscreen()` was added during that wrong
+diagnosis. It is kept because it is a genuine safeguard —
+`setFrameAutosaveName` does restore a frame verbatim without checking the
+screen still exists, so a real unplug would strand the window — but it is
+guarding a case that has not actually been observed.
 
 ## Known legibility limits without a plate
 
