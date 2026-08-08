@@ -58,9 +58,6 @@ enum MeterState: String, CaseIterable, Identifiable {
         default:        return Tokens.dormantC
         }
     }
-
-    /// Only the top state animates, and every animation has a still fallback.
-    var animates: Bool { self == .critical }
 }
 
 /// Everything a style needs to draw itself. Styles are pure functions of this.
@@ -85,12 +82,27 @@ struct AvatarInput {
     /// than as the character itself. With it off the styles get a drop shadow
     /// instead, which is what keeps them legible over pale wallpaper.
     var showsBackground: Bool = false
+    /// The state this one replaced, and the moment it did, on
+    /// `timeIntervalSinceReferenceDate`.
+    ///
+    /// A style that morphs between poses has to know where it is coming from,
+    /// and a SwiftUI view cannot remember: styles are structs rebuilt on every
+    /// update. So whoever derives the state records the change and passes it
+    /// down. Both nil means "no history" — draw the state outright — which is
+    /// what the settings preview wants while its slider sweeps and what the
+    /// offscreen renderers need to capture a settled frame.
+    var previousState: MeterState?
+    var stateChangedAt: TimeInterval?
 
     /// Three or more concurrent sessions switches styles to their multi
     /// variant. Two is common enough to be unremarkable.
     var isMany: Bool { sessions.count >= 3 }
 
-    var animates: Bool { state.animates && motionAllowed }
+    /// True when cycles are allowed to run at all. Reduce motion — the system
+    /// setting, or the app's own checkbox — is the only thing that turns it
+    /// off. Which states actually move is each style's own business, and every
+    /// one of them asks about the state before it asks about this.
+    var animates: Bool { motionAllowed }
 
     /// Colour for an arbitrary reading using the caller's thresholds.
     static func ramp(_ pct: Double?, _ t: Thresholds) -> Color {

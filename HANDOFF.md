@@ -17,6 +17,9 @@ Verified against real payloads, not synthetic ones:
   elapsed reset, 1M context, empty stdin, malformed stdin, path-unsafe
   session_id). Runs in ~50 ms against a 3 s chain deadline.
 - Store, settings and styles: `scripts/selftest.sh`, 36 assertions, all pass.
+- Installer and hooks: `scripts/selftest-install.sh`, 30 assertions, all pass —
+  against a fake `$HOME` and a fake checkout, so none of it touches this
+  machine.
 - Decode: real snapshots from two concurrent sessions decode with correct
   names, percentages, token counts, costs, and reset countdowns.
 - Every style in every state: rendered to `docs/avatar-states.png` and looked
@@ -32,6 +35,50 @@ Verified against real payloads, not synthetic ones:
   (3 pt) is the one knob if it ever mis-fires.
 - Anything about how the app behaves over time — the panel surviving a display
   change, the popover under a Space switch, the LaunchAgent after a reboot.
+
+## The installer only ever worked here
+
+An audit of what stands between this and someone else using it came back with
+one blocker that made everything else moot: `install.sh` wired the status line
+only inside `if [ -d "$HOME/.kickbacks" ]`. The else branch printed a path and
+moved on, nothing in the file wrote `.statusLine`, and "Done." printed either
+way. Since `rate_limits` arrive through the status line and nowhere else, anyone
+without that third-party plugin got a complete install, a menubar item, and no
+data — permanently, silently, and indistinguishably from "no session running".
+
+Fixed, with `scripts/selftest-install.sh` covering each case. What is worth
+carrying forward:
+
+- **Never print success you have not read back.** The install now re-reads
+  `.statusLine.command` (or the chain file) and refuses to say "Done" unless it
+  names this checkout's collector. Every remaining diagnostic idea in this file
+  is downstream of that principle.
+- **Never redirect jq at a file you care about.** `jq ... > "$SETTINGS"`
+  truncates settings.json before jq runs, so a missing or failing jq left it at
+  zero bytes. Temp file then `mv`, the way the collector already writes
+  snapshots.
+- **Append hooks, never assign them.** `.hooks.SessionStart = [...]` deleted
+  whatever else was registered, and the old "already present" guard tested for
+  *any* SessionEnd hook, so someone else's entry meant neither of ours was
+  installed and the install said so was fine. It now strips this checkout's own
+  command and re-appends, which is idempotent without being blind.
+- **Resolve paths from `$0`, not `$HOME`.** The SessionStart hook hardcoded
+  `$HOME/claude-meter`, so on any other checkout it hit its `[ -x ]` guard and
+  exited 0 — the self-healing hook was a permanent no-op for exactly the people
+  who needed it.
+- **`jq` comes from `PATH`.** `/usr/bin/jq` exists on current macOS but not on
+  older versions, where Homebrew's is the only one. A jq that exists but will
+  not run used to be reported as "settings.json is not valid JSON".
+- **`LC_ALL` beats `LC_NUMERIC`, and bash ignores `LC_ALL=C printf`.** The
+  prefix form does nothing to a builtin because bash only reloads its locale on
+  a real assignment, so the collector does `unset LC_ALL; export LC_NUMERIC=C`.
+  Without it, cost rendered as `$0,000.00` everywhere the decimal separator is a
+  comma.
+
+The hook also re-claims an empty `.statusLine` on machines with no kickbacks, so
+that path self-heals too — but only when the slot is empty. A status line
+pointing somewhere else is the user's, and the installer stops with the exact
+command rather than replacing it.
 
 ## Design provenance
 
@@ -63,6 +110,99 @@ binary's internals mention `seven_day_opus`, `seven_day_sonnet`,
 a live payload. The collector passes the whole object through, so if they ever
 show up they land in the snapshot without a code change; the app would need
 updating to display them.
+
+## The pixel creature moves
+
+Implemented from §2 of the design handoff and `pixel-creature-anim.jsx`, which
+is the pixel-exact reference. All of it lives in `PixelCreatureAvatar.swift`.
+
+Everything is a discrete frame. One `TimelineView` drives the whole sprite,
+`frame(at:)` turns the clock into a `PixelFrame`, and `PixelMotion` — `stepped`,
+`toggle`, `cycle` — is the only arithmetic allowed to touch time. There is no
+`withAnimation` and there must not be: an interpolated sprite stops reading as
+pixel art. `HoppingLayer` is gone; critical shifts sideways instead of jumping,
+which is what the spec asks for and what stops the state reading as cheerful.
+
+**The critical shake is ±0.5 unit, not ±1.** §2's text says ±1 and the JSX
+reference says ±0.5; both were rendered at the default 1.75× and compared. One
+unit of total travel is a creature trembling. Two units is 10.5 pt of lateral
+movement every 0.35 s, which reads as the window being dragged rather than as
+panic, and puts the arms on the edge of the ground plate at each extreme. The
+reference wins, which also matches the rest of §2 — the bob and the breath are
+0.4 u, so sub-unit steps are already this sprite's idiom.
+
+Two things are worth knowing before changing any of it:
+
+- **`AvatarInput.animates` now means "reduce motion is off", nothing more.** It
+  used to be `state == .critical && motionAllowed`, which was fine while
+  critical was the only thing that moved. Every style already gates on
+  `state == .critical` before consulting it, so the other three are unaffected;
+  `MeterState.animates` was deleted rather than left lying around meaning
+  something it no longer meant.
+- **The pose morph needs history, so the store keeps it.** `SnapshotStore`
+  records the previous state and when it changed, and hands both to the style
+  through `AvatarInput`. A style cannot remember it — structs are rebuilt on
+  every update, and `@State` does not compile here — and a shared mutable
+  tracker would have the settings preview and the live avatar overwriting each
+  other's idea of "previous". Both fields nil means "no history, draw the state
+  outright", which is exactly what the preview wants while its slider sweeps
+  and what `--render-grid` needs to capture a settled frame.
+
+Two deliberate deviations, both from following the animated reference over the
+prose:
+
+- The `z` glyphs drift 6 **pt**, not 6 units. §2 says units; the reference moves
+  them 6 pt, and 18 pt would slice the small `z` on the top edge of the tile
+  while it is still 30% opaque.
+- The falling sweat pixel is not drawn at all when motion is off. Frozen at the
+  top of its fall it reads as a third sweat pixel next to the two the anatomy
+  specifies, and those two are what the still frame is meant to show.
+
+The still sheet is the check that matters: `--render-grid` output is
+byte-identical to `docs/avatar-states.png` from before the change, so no state's
+frozen frame moved. Motion itself was verified by rendering the creature
+repeatedly over real time and measuring the sprite — bob and breath 4 px at 3×
+(0.4 u), the critical shake 10 px of travel (1 u), both blinks landing, the drop
+falling in five steps, the `z`s rising and fading, and every state collapsing to
+exactly one frame with `motionAllowed: false`.
+
+### What it costs, and why the schedule is not a frame rate
+
+The first version drove this with `TimelineView(.animation(minimumInterval:
+1/30))` and cost six times HEAD's idle CPU. A sprite made of step functions does
+not need a frame rate: `PixelStepSchedule` yields only the instants at which
+some cycle turns over, taking the minimum across whichever cycles the current
+state runs, and parks when a state has none. Redraws went from ~30/s to between
+2.1/s (calm) and 6.5/s (strained) — which is the spec's own step count plus the
+one-a-second redraw the store's tick already forced before any of this.
+
+Measured with a 20 s sample after an 8 s settle, alternating binaries, three
+reps each, in a fixed synthetic state (`scratchpad/bench.sh`):
+
+| state | HEAD | this | redraws/s |
+|---|---|---|---|
+| calm | 2.0% | 2.5% | 2.1 |
+| focused | 2.0% | 3.0% | 3.3 |
+| asleep | 2.2% | 4.8% | 5.3 |
+| critical | 2.6% | 4.7% | 5.7 |
+| strained | 2.0% | 6.7% | 6.5 |
+| empty / stale / no data | 1.9% | 1.9% | 1 |
+
+**Do not read a single measurement.** Identical work costs between 5 and 15 ms
+per redraw depending on where macOS parks the process; the same strained build
+measured 6.7% on an idle machine and 13.4% twenty minutes later under load,
+while HEAD moved the other way. Only interleaved repetitions are comparable, and
+even then the absolute numbers travel: against the real snapshot directory with
+five sessions in it, asleep measured 1.2% for HEAD and 6.0% for this.
+
+The residual is not the drawing. At the same 6.5 redraws/s, a canvas that draws
+*nothing* costs 6.3% against the full sprite's 7.4% — so ~85% of every redraw is
+SwiftUI updating the hosting view and flushing a transparent window, and the art
+is the remaining 15%. Removing the drop shadow changes nothing measurable.
+Nothing inside a style can move that number: the levers are the per-redraw cost
+itself (the planned baseline work) or fewer steps than §2 asks for. Worth noting
+if that trade comes up: the spec's own Interactions section says "only critical
+may animate continuously", which §2 then contradicts state by state.
 
 ## Gotchas
 
@@ -214,6 +354,36 @@ guarding a case that has not actually been observed.
 
 ## Next steps
 
+The audit that produced the installer fixes above ranked the rest of it. In
+order, because each one unblocks the next:
+
+- **Make failure legible.** Every failure mode still renders as an empty
+  menubar item: unwired status line, missing jq, Console billing, no session
+  open, moved checkout. A `bin/claude-meter-doctor` that checks each of those
+  and prints pass/fail is the single highest-value thing left. `last-raw.json`
+  is written before any parsing, so its absence proves the collector has never
+  run — which is the one signal that distinguishes "not connected" from "idle",
+  and `SnapshotStore.state` currently returns `.empty` for both.
+- **Pay back the idle CPU.** Baseline is ~1.8% of a core before the creature
+  moves and 2.5–6.7% after, against a target of 0.5%. Three known causes, none
+  of them the avatar: `.id(store.tick...)` at `SessionListView.swift:31` tears
+  down and rebuilds a 296 pt view tree every second; `refreshStatusItem()`
+  rebuilds an `NSImage` and an attributed title every second for strings that
+  change once a minute; and `popover.contentViewController` is never cleared on
+  close, so both hosting controllers keep rebuilding invisibly — that last one
+  is the permanent step from ~1.7% to ~4.6% after the first popover open.
+- **Treat an elapsed rate-limit window as reset.** `SnapshotStore` reads the
+  percentage off the newest snapshot with no expiry check, so hours after a
+  window provably emptied the app still shows its last value in grey. Every
+  snapshot already carries `resets_at`; the only place it meets `now` is
+  `Format.swift:37-40`, where it merely suppresses a countdown. Best
+  value-per-hour item on this list — no new data, no new storage, and it turns
+  the moment the tool is least useful into the moment it is most useful.
+- **Keep one line of history.** A `{ts, five_hour_pct, resets_at}` append to a
+  `history.jsonl` after the snapshot write, trimmed by the same sweep, is the
+  entire data dependency for burn rate and for "will this run die halfway" —
+  the question the current architecture structurally cannot answer, because
+  `SessionEnd` and the 24 h sweep mean nothing is ever retained.
 - Decide whether the pixel creature sits too high in its ground. Content spans
   y 6–31.5 in a 48 pt box, so there is 6 pt above and 16.5 pt below. It is
   faithful to the spec's coordinates, which is why it was left alone; shifting
@@ -235,7 +405,8 @@ guarding a case that has not actually been observed.
 ```bash
 ./install.sh                 # build + wire + load. idempotent.
 ./scripts/build-app.sh       # rebuild the bundle only
-./scripts/selftest.sh        # 19 headless assertions
+./scripts/selftest.sh        # 36 headless assertions: store, settings, styles
+./scripts/selftest-install.sh # 30 assertions: installer + hooks, fake $HOME
 launchctl kickstart -k gui/$UID/com.momentumminds.claude-meter   # restart the app
 
 ./dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --render-grid /tmp/s.png  # every style, every state

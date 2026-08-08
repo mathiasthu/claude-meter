@@ -12,7 +12,16 @@ final class SnapshotStore: ObservableObject {
 
     @Published private(set) var sessions: [Snapshot] = []
     /// Advances once a second so SwiftUI recomputes countdowns and staleness.
-    @Published private(set) var tick: Date = Date()
+    @Published private(set) var tick: Date = Date() { didSet { trackState() } }
+
+    /// The state before the current one, and when it changed. The avatar morphs
+    /// between poses, so it needs both; nothing else in the app remembers them,
+    /// and a style cannot, being a struct rebuilt on every update. This is the
+    /// one place the state is actually derived, so it is the one place that can
+    /// notice it moving.
+    private var settledState: MeterState?
+    private var priorState: MeterState?
+    private var stateChangedAt: TimeInterval?
 
     /// Thresholds and the state-source choice live in settings; the store reads
     /// them so every surface derives the same state from the same rules.
@@ -45,6 +54,8 @@ final class SnapshotStore: ObservableObject {
         self.settings = settings
         try? FileManager.default.createDirectory(
             at: Self.sessionsDirectory, withIntermediateDirectories: true)
+        // The first reload seeds the state tracker, so the avatar comes up in
+        // its state rather than morphing into it from nowhere.
         reload()
         startWatching()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -130,8 +141,24 @@ final class SnapshotStore: ObservableObject {
             sessions: liveSessions.map { $0.context.usedPercentage },
             age: newestAge,
             motionAllowed: settings.motionAllowed,
-            showsBackground: settings.showBackground
+            showsBackground: settings.showBackground,
+            previousState: priorState,
+            stateChangedAt: stateChangedAt
         )
+    }
+
+    /// Records a state change. Called from every path that can cause one: a new
+    /// snapshot, the second-by-second tick that ages data into staleness, and
+    /// the settings republish that follows a threshold edit.
+    private func trackState() {
+        let now = state
+        guard now != settledState else { return }
+        // The first observation is not a change -- there was no pose to leave.
+        if let settled = settledState {
+            priorState = settled
+            stateChangedAt = Date().timeIntervalSinceReferenceDate
+        }
+        settledState = now
     }
 
     /// The value the menubar title shows, per the user's metric choice.
@@ -170,6 +197,7 @@ final class SnapshotStore: ObservableObject {
         }
         // Most recently active first -- that is the session you are looking at.
         sessions = loaded.sorted { $0.ts > $1.ts }
+        trackState()
     }
 
     // MARK: - Watching
