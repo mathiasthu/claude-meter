@@ -11,8 +11,6 @@ import AppKit
 /// every re-render of the view.
 @MainActor
 final class AvatarUIState: ObservableObject {
-    @Published var hovering = false
-
     /// Drag bookkeeping, so a click can be told apart from a drag.
     ///
     /// Tracked in screen coordinates via `NSEvent.mouseLocation` rather than
@@ -28,15 +26,18 @@ final class AvatarUIState: ObservableObject {
 }
 
 /// What the floating panel actually hosts: whichever style the user picked,
-/// fed from the store, with a hover-revealed close affordance.
+/// fed from the store.
 ///
-/// The card itself has no chrome — every style carries its own ground, because
-/// each one needs a different shape of it.
+/// It has no chrome of its own — every style carries its own ground, because
+/// each one needs a different shape of it, and there is deliberately no close
+/// button. The avatar is a character sitting on the desktop; a control that
+/// appears on approach makes it a widget, and the hit target it needs is a
+/// quarter of the whole sprite at 1×. Hiding it lives in the menubar menu and
+/// in the popover, both of which are reachable without covering the art.
 struct AvatarHost: View {
     @ObservedObject var store: SnapshotStore
     @ObservedObject var settings: SettingsStore
     @ObservedObject var ui: AvatarUIState
-    var onClose: () -> Void = {}
     /// Called on a press that did not turn into a drag.
     var onClick: () -> Void = {}
     /// Called with a screen-space delta while dragging.
@@ -73,19 +74,6 @@ struct AvatarHost: View {
                         if wasClick { onClick() }
                     }
             )
-            .overlay(alignment: .topTrailing) {
-                if ui.hovering && !settings.ignoreMouse {
-                    Button(action: onClose) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .offset(x: 4, y: -4)
-                    .help("Hide the avatar (reopen from the menubar)")
-                }
-            }
-            .onHover { ui.hovering = $0 }
             .help(tooltip)
     }
 

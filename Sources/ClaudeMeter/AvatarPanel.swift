@@ -15,14 +15,13 @@ final class AvatarPanel: NSPanel {
 
     private var moveObserver: AnyObject?
     private var settingsObserver: AnyCancellable?
-    /// Held here so the card's hover state survives re-renders -- see
+    /// Held here so the drag bookkeeping survives re-renders -- see
     /// AvatarUIState for why this is not `@State`.
     private let ui = AvatarUIState()
     private let settings: SettingsStore
     private var host: NSHostingView<AvatarHost>!
 
     init(store: SnapshotStore, settings: SettingsStore = .shared,
-         onClose: @escaping () -> Void,
          onClick: @escaping () -> Void = {}) {
         self.settings = settings
         super.init(
@@ -51,7 +50,6 @@ final class AvatarPanel: NSPanel {
 
         host = NSHostingView(rootView: AvatarHost(
             store: store, settings: settings, ui: ui,
-            onClose: onClose,
             onClick: onClick,
             onDrag: { [weak self] dx, dy in self?.moveBy(dx: dx, dy: dy) }))
         contentView = host

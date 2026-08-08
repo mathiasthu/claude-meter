@@ -175,10 +175,6 @@ final class MenubarController {
         if avatar == nil {
             avatar = AvatarPanel(
                 store: store, settings: settings,
-                onClose: { [weak self] in
-                    // The card's own close button: hide, and remember that.
-                    self?.settings.avatarVisible = false
-                },
                 onClick: { [weak self] in self?.toggleAvatarPopover() })
         }
         // orderFrontRegardless, not makeKeyAndOrderFront: showing the widget
