@@ -16,6 +16,11 @@ final class AvatarUIState: ObservableObject {
     /// Tracked in screen coordinates via `NSEvent.mouseLocation` rather than
     /// the gesture's own translation: the window moves under the cursor while
     /// dragging, which makes view-relative translation fight itself.
+    ///
+    /// `pressMouse` is where the press started, not where the pointer was last
+    /// seen. The panel positions itself from an absolute mouse reading every
+    /// event, so nothing here may accumulate — see `AvatarPanel.dragTo`.
+    var pressMouse: NSPoint?
     var lastMouse: NSPoint?
     var dragDistance: CGFloat = 0
 
@@ -40,8 +45,11 @@ struct AvatarHost: View {
     @ObservedObject var ui: AvatarUIState
     /// Called on a press that did not turn into a drag.
     var onClick: () -> Void = {}
-    /// Called with a screen-space delta while dragging.
-    var onDrag: (CGFloat, CGFloat) -> Void = { _, _ in }
+    /// Called once when a press begins, with the pointer in screen coordinates,
+    /// so the panel can record where it was grabbed.
+    var onGrab: (NSPoint) -> Void = { _ in }
+    /// Called with the absolute pointer position on every event past the slop.
+    var onDrag: (NSPoint) -> Void = { _ in }
 
     var body: some View {
         ScaledAvatar(style: settings.styleID,
@@ -55,21 +63,23 @@ struct AvatarHost: View {
                     .onChanged { _ in
                         let now = NSEvent.mouseLocation
                         if let last = ui.lastMouse {
-                            let dx = now.x - last.x, dy = now.y - last.y
-                            ui.dragDistance += hypot(dx, dy)
+                            ui.dragDistance += hypot(now.x - last.x, now.y - last.y)
                             // Only actually move once past the slop, so a click
                             // never nudges the avatar a pixel sideways.
                             if ui.dragDistance >= AvatarUIState.clickSlop {
-                                onDrag(dx, dy)
+                                onDrag(now)
                             }
                         } else {
                             ui.dragDistance = 0
+                            ui.pressMouse = now
+                            onGrab(now)
                         }
                         ui.lastMouse = now
                     }
                     .onEnded { _ in
                         let wasClick = ui.dragDistance < AvatarUIState.clickSlop
                         ui.lastMouse = nil
+                        ui.pressMouse = nil
                         ui.dragDistance = 0
                         if wasClick { onClick() }
                     }

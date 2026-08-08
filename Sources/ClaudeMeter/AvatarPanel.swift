@@ -51,7 +51,8 @@ final class AvatarPanel: NSPanel {
         host = NSHostingView(rootView: AvatarHost(
             store: store, settings: settings, ui: ui,
             onClick: onClick,
-            onDrag: { [weak self] dx, dy in self?.moveBy(dx: dx, dy: dy) }))
+            onGrab: { [weak self] mouse in self?.grab(at: mouse) },
+            onDrag: { [weak self] mouse in self?.dragTo(mouse) }))
         contentView = host
 
         applySettings()
@@ -80,11 +81,33 @@ final class AvatarPanel: NSPanel {
         }
     }
 
-    /// Moves the panel by a screen-space delta, and remembers where it landed.
+    /// Where the panel's origin sat relative to the pointer when the drag
+    /// started. Held for the length of one drag so every subsequent position is
+    /// derived from an absolute mouse reading rather than from the last one.
+    private var grabOffset: NSSize?
+
+    private func grab(at mouse: NSPoint) {
+        grabOffset = NSSize(width: frame.origin.x - mouse.x,
+                            height: frame.origin.y - mouse.y)
+    }
+
+    /// Places the panel under the pointer, and remembers where it landed.
+    ///
+    /// This is anchored rather than incremental for a reason that cost a real
+    /// bug: `setFrameOrigin` quantises to whole points by flooring, so feeding
+    /// it a running sum of mouse deltas throws away the fraction on every
+    /// event and never gets it back. Floor biases that loss the same way every
+    /// time, so the avatar crept down and to the left no matter which way it
+    /// was dragged — measured at 194 pt left and 190 pt down over one drag of
+    /// 529 events. Re-deriving the origin from the pointer each event makes
+    /// the error non-cumulative, and lets a dropped or restarted gesture
+    /// correct itself on the next event instead of lagging forever.
+    ///
     /// Not clamped mid-drag — the user is allowed to park it half off an edge
     /// if they want; only automatic resizes get pulled back.
-    private func moveBy(dx: CGFloat, dy: CGFloat) {
-        setFrameOrigin(NSPoint(x: frame.origin.x + dx, y: frame.origin.y + dy))
+    private func dragTo(_ mouse: NSPoint) {
+        guard let offset = grabOffset else { return }
+        setFrameOrigin(NSPoint(x: mouse.x + offset.width, y: mouse.y + offset.height))
     }
 
     /// Never becomes key: typing always goes to the app underneath.

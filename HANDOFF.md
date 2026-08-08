@@ -35,9 +35,11 @@ Verified against real payloads, not synthetic ones:
 
 ### What is not covered by any test
 
-- The click-versus-drag split on the avatar. Logic-only; synthetic clicks need
-  Accessibility permission this machine does not grant. `AvatarUIState.clickSlop`
-  (3 pt) is the one knob if it ever mis-fires.
+- The click-versus-drag split on the avatar. Synthetic clicks need Accessibility
+  permission this machine does not grant, so there is no automated test —
+  dragging has since been driven by hand and traced (see below), but clicking
+  has not. `AvatarUIState.clickSlop` (3 pt) is the one knob if it ever
+  mis-fires.
 - Anything about how the app behaves over time — the panel surviving a display
   change, the popover under a Space switch, the LaunchAgent after a reboot.
 
@@ -324,9 +326,33 @@ Two things make this less obvious than it sounds:
 
 Verified with `--open-avatar-popover`, which opens it at launch without
 promoting the activation policy, so it exercises the real `.accessory` path.
-The click/drag split itself is logic-only — it has not been driven with a real
-mouse, because synthetic clicks need Accessibility permission this machine does
-not grant.
+Clicking still has no automated coverage; synthetic clicks need Accessibility
+permission this machine does not grant.
+
+### Never position the panel by accumulating deltas
+
+Dragging is anchored: `onGrab` records `frame.origin − mouse` once at the press
+and every later event sets the origin to `mouse + offset`. Distance is still
+accumulated, but only to decide click versus drag — never to place the window.
+
+The first version summed the per-event mouse deltas into `setFrameOrigin`, and
+the avatar slid away from the pointer, always down and to the left whichever way
+it was dragged. `setFrameOrigin` quantises to whole points by flooring, so each
+event silently discarded its fraction, and because the next delta came from the
+mouse rather than from where the window actually was, the loss was never
+recovered. Flooring biases it the same direction every time, so it accumulated
+instead of cancelling.
+
+Traced with a real mouse rather than reasoned about. One drag of 529 events lost
+194 pt to the left and 190 pt downward; the same instrumentation after the fix
+showed 1744 events ending 0.65 × 0.24 pt from the pointer, with no drift. Its
+only outliers were 19 events pinned at y 1038, which is macOS refusing to place
+a window under the menubar — and each corrected itself on the next event, which
+is the property anchoring buys.
+
+A dropped or restarted gesture is now self-correcting for the same reason. The
+old code lost a 106 × 133 pt jump permanently when SwiftUI cancelled and
+restarted the drag mid-gesture, which it did once in that trace.
 
 ## This machine has two displays — mind that when screenshotting
 
