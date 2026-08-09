@@ -500,6 +500,14 @@ no jq.
 
 ## Gotchas
 
+- **`pkill` does not stop a KeepAlive LaunchAgent.** launchd respawns the app
+  within about a second, and the respawn can land between the copy and the
+  `codesign` in `build-app.sh` — which then fails against a running binary with
+  "Bad file descriptor" and leaves the bundle unsigned while the script reports
+  success. Observed once, intermittently, which is the worst way to find out.
+  The script now boots the agent out when it is loaded, waits for the process
+  to actually go, verifies the signature it just applied, and restarts the
+  agent at the end.
 - **`@State` does not compile on this machine.** SwiftUI's macro plugin
   (`SwiftUIMacros`) is on neither toolchain — not CommandLineTools, not
   Xcode's, and not in any SDK. `@State`, and presumably `@AppStorage` and
@@ -681,6 +689,14 @@ settle then a 30 s sample, medians of three or more reps:
 | idle, popover never opened | 1.27% | 0.03% |
 | idle, popover opened once and closed | 2.50% | 0.03% |
 
+Both of those were taken with `avatar.visible` off, because an agent measuring
+this must not put a floating window on someone's desktop. The shipping
+configuration — pixel creature visible at 1.93×, animating — was measured
+afterwards against the installed bundle on the real machine: **0.60% and 0.95%
+across two 40 s samples**. So the sprite costs roughly 0.6–0.9 points on top of
+an app that now idles at effectively nothing, and the whole thing sits under
+1% where it used to sit between 2.5% and 4.8%.
+
 **A `.id` is not a refresh.** `SessionListView` was keyed on
 `.id(store.tick…)`, and a changing id tells SwiftUI this is a *different view*,
 not that the old one needs recomputing — so the whole 296 pt tree was destroyed
@@ -747,12 +763,7 @@ strand the sprite on a stale frame.
 The audit that produced the installer fixes above ranked the rest of it. In
 order, because each one unblocks the next:
 
-- **Measure the idle CPU with the avatar on screen.** The three causes below
-  are paid off, but every measurement behind them was taken with
-  `avatar.visible` off, because an agent measuring this must not put a floating
-  window on someone's desktop. What the sprite costs per redraw, and therefore
-  what the whole app now idles at in its shipping configuration, has not been
-  measured since the tick stopped firing sixty times a minute.
+
 - **Read the history trail.** The data layer landed 2026-08-09 (see above) and
   is filling up now; nothing consumes it yet. Burn rate from the last two
   samples, a 5-hour sparkline in the popover, and "this task will hit the wall
