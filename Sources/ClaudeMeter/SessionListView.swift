@@ -26,9 +26,17 @@ struct SessionListView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(width: 296)
-        // Redrawn on the store's one-second tick, so countdowns and ages stay
-        // honest with no file activity.
-        .id(store.tick.timeIntervalSince1970.rounded())
+        // Deliberately not keyed on the store's tick. `.id(store.tick…)` used
+        // to sit here, and a changing id does not mean "recompute this view",
+        // it means "this is a different view" — so SwiftUI destroyed the whole
+        // 296 pt tree and built a fresh one every second. A `sample` of the
+        // idle process came back inside
+        // NSHostingView.swiftui_addManagedSubview → addSubview →
+        // _createLayerAndInitialize, which is backing layers being created for
+        // rows that had just been thrown away. The `@ObservedObject` above
+        // already invalidates the body on every tick, and that is what keeps
+        // the countdowns and the ages honest; the id only ever decided whether
+        // the old views were reused or discarded on the way.
     }
 
     // MARK: - Account windows

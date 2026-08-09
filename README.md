@@ -44,19 +44,52 @@ and `/context` are built in.
 
 | Path | What it does |
 |---|---|
-| `bin/claude-meter-collect` | Status line command. Publishes a snapshot per session and prints the HUD line. |
+| `bin/claude-meter-collect` | Status line command. Publishes a snapshot per session, appends to the history trail, and prints the HUD line. |
 | `bin/claude-meter-session-end` | `SessionEnd` hook. Deletes the snapshot so the avatar knows the session closed. |
 | `bin/claude-meter-session-start` | `SessionStart` hook. Re-asserts the status line chain if something clobbered it. |
+| `bin/claude-meter-doctor` | Says which part of the wiring is broken. Read-only. |
 | `Sources/ClaudeMeter/` | The menubar app and floating avatar. |
 | `scripts/build-app.sh` | Builds `dist/ClaudeMeter.app`. |
 | `scripts/selftest.sh` | Headless tests for the store, moods, liveness, and malformed input. |
-| `scripts/selftest-install.sh` | Headless tests for the installer and hooks, against a fake `$HOME`. |
+| `scripts/selftest-install.sh` | Headless tests for the installer, hooks, collector and doctor, against a fake `$HOME`. |
 | `install.sh` | Does all of the wiring below. Idempotent. |
 
 Snapshots live outside the repo, in `~/.local/state/claude-meter/`:
 
 - `sessions/<session_id>.json` — one per session, rewritten on every status line refresh
 - `last-raw.json` — the most recent raw status line payload, kept for debugging schema changes
+- `history.jsonl` — the account's rate-limit history, one line a minute
+
+### The history trail
+
+The first two are overwrites. They answer "where am I right now" and nothing
+else: `SessionEnd` deletes a session's file the moment it closes, and a 24-hour
+sweep clears whatever died without firing the hook. `history.jsonl` is the one
+thing here that accumulates.
+
+```json
+{"ts":1786243870,"five_hour_pct":11,"five_hour_reset":1786253400,"seven_day_pct":54,"seven_day_reset":1786474800}
+```
+
+- **One line a minute, for the account, not the session.** Both windows are
+  account-level, so every session open right now reports the same two numbers.
+  The collector claims a one-minute slot before it writes anything, which is why
+  three sessions mid-answer leave one line rather than several a second.
+- **Appended, never rewritten.** `>>` opens with `O_APPEND`, where the
+  seek-to-end and the write are one indivisible step, and a line is ~113 bytes —
+  short enough to be a single `write()`. Two collectors racing can interleave
+  lines but not characters.
+- **Absent is still not zero.** No `rate_limits` in the payload appends no line
+  at all. One window present and the other missing writes an explicit `null`.
+- **Eight days.** One more than the 7-day window, so a full 7-day window is
+  always covered. Trimming only happens once the file passes 2 MB, and drops by
+  age rather than by count.
+- Skip a line you cannot parse. A crash mid-append can in principle leave a torn
+  one; the next trim discards anything without a well-formed leading `ts`.
+
+Nothing reads it yet. It exists so that burn rate, a 5-hour sparkline, and "will
+this task outlive the window" become answerable later — none of them are while
+every reading is thrown away a day after it arrives.
 
 ## Install
 
@@ -205,6 +238,27 @@ ClaudeMeter --open-settings --settings-pane thresholds
 The two render modes draw offscreen through `ImageRenderer`, so they need no
 screen-recording permission. They cannot draw `ScrollView` content or
 AppKit-backed controls, so the settings panes need the real window.
+
+## Nothing in the menubar?
+
+Every way this can fail looks the same from the outside — an empty menubar
+item. Unwired status line, missing `jq`, Console billing, a checkout that
+moved, or simply no message sent yet. So ask:
+
+```bash
+bin/claude-meter-doctor
+```
+
+It only reads. It checks `jq`, that `settings.json` parses, that the status
+line names *this* checkout's collector, that both hooks are registered, that
+the LaunchAgent is loaded and running, and whether the collector has ever
+actually been called — then prints a fix under anything that failed and exits
+non-zero.
+
+The one that catches most people: `last-raw.json` is written on the
+collector's first invocation, before it parses anything, so its absence proves
+Claude Code has never called it. That is the difference between "not wired"
+and "wired, nothing has happened yet", and the doctor says which.
 
 ## Uninstall
 

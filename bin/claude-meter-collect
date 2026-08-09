@@ -8,7 +8,11 @@
 #      outside Claude Code (the ClaudeMeter menubar app) can read usage without
 #      a live session of their own. This is the only channel that exists --
 #      rate_limits are delivered to the status line and nowhere else.
-#   2. Prints a one-line HUD to stdout, which Claude Code renders.
+#   2. Appends one line to a history trail, because the snapshot is a
+#      point-in-time overwrite and the SessionEnd hook deletes it. Without a
+#      trail nothing about the past survives, which makes burn rate and "will
+#      this task outlive the window" unanswerable rather than merely awkward.
+#   3. Prints a one-line HUD to stdout, which Claude Code renders.
 #
 # It is invoked indirectly: the kickbacks ad status line owns the statusLine
 # slot in settings.json and chains to whatever is named in
@@ -40,7 +44,30 @@ export LC_NUMERIC=C
 JQ="$(command -v jq || true)"
 STATE="${CLAUDE_METER_STATE:-$HOME/.local/state/claude-meter}"
 SESSIONS="$STATE/sessions"
+HISTORY="$STATE/history.jsonl"
 MAX_AGE_MIN=1440
+
+# History trail knobs, all in the units they are compared against.
+#
+# One sample a minute is the sampling grid. It is finer than anything a 5-hour
+# or 7-day bar can usefully resolve, and coarse enough that a fully saturated
+# week costs about 1.2 MB -- while still being the natural unit for a status
+# line that can fire several times a second when Claude Code is mid-answer.
+#
+# Eight days of retention rather than seven: the 7-day window is a rolling one,
+# so a trail cut at exactly seven days would be one line short of covering it
+# for every moment except the instant after a trim. The extra day is the margin
+# that makes "the whole 7-day window" always true.
+#
+# The byte cap is a backstop, not the retention rule. It only decides *when* it
+# is worth paying for a rewrite; HISTORY_MAX_AGE_SEC decides what survives one.
+# At the sampling grid above, eight days is ~11.5k lines and ~1.3 MB, so a 2 MB
+# trigger means a trim happens rarely and always has real work to do.
+HISTORY_INTERVAL=60
+HISTORY_MAX_AGE_SEC=691200
+HISTORY_MAX_LINES=20000
+HISTORY_MAX_BYTES=2000000
+HISTORY_MAX_LINE=512
 
 input=$(cat)
 
@@ -48,12 +75,24 @@ input=$(cat)
 [ -n "$JQ" ] || exit 0
 [ -n "$input" ] || exit 0
 
-mkdir -p "$SESSIONS" 2>/dev/null || exit 0
+# A state directory that cannot be created is survivable, and used to not be:
+# this exited 0 before printing anything, so an unwritable $HOME took the HUD
+# down with the snapshots. The HUD is the half the user actually looks at and it
+# needs nothing from disk, so the failure is allowed through. Every write below
+# is individually guarded and degrades to a no-op on its own.
+#
+# That makes a failing open() reachable for the first time, so every write from
+# here down puts `2>/dev/null` *before* its output redirection. Bash applies
+# redirections left to right and reports a failed one on whatever fd 2 is at
+# that instant, so the familiar trailing form would let "No such file or
+# directory" through to the terminal on exactly the paths this is meant to
+# survive.
+mkdir -p "$SESSIONS" 2>/dev/null || true
 
 # Keep the last raw payload. Claude Code's status line schema gains fields
 # between releases (rate_limits carries undocumented windows in 2.1.224), so
 # having the real thing on disk beats guessing from the docs.
-printf '%s' "$input" > "$STATE/last-raw.json.tmp.$$" 2>/dev/null &&
+printf '%s' "$input" 2>/dev/null > "$STATE/last-raw.json.tmp.$$" &&
   mv -f "$STATE/last-raw.json.tmp.$$" "$STATE/last-raw.json" 2>/dev/null
 rm -f "$STATE/last-raw.json.tmp.$$" 2>/dev/null
 
@@ -104,13 +143,123 @@ case "$sid" in
 esac
 
 tmp="$SESSIONS/.$sid.json.tmp.$$"
-if printf '%s\n' "$snapshot" > "$tmp" 2>/dev/null; then
+if printf '%s\n' "$snapshot" 2>/dev/null > "$tmp"; then
   # rename() is atomic on APFS, so the app never observes a half-written file.
   mv -f "$tmp" "$SESSIONS/$sid.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
 fi
 
 # Sweep snapshots left behind by sessions that died without a SessionEnd hook.
+# Deliberately scoped to $SESSIONS and to *.json: history.jsonl sits one level
+# up and does not match either, and it must not -- it is the one file here whose
+# whole value is being old.
 find "$SESSIONS" -type f -name '*.json' -mmin +"$MAX_AGE_MIN" -delete 2>/dev/null
+
+# ----------------------------------------------------------- history trail --
+#
+# The 5-hour and 7-day windows are properties of the account, not of a session,
+# so every session that is open right now sees the same two numbers and would
+# otherwise each write them. Three concurrent sessions mid-answer would append
+# several near-identical lines a second, which is noise that costs disk and buys
+# nothing: the underlying numbers move on the order of minutes.
+#
+# So the trail is sampled on a fixed one-minute grid rather than throttled per
+# process, and a bucket is claimed before any work is done. Claiming is a stamp
+# file created with O_EXCL -- which is exactly what `>` becomes under noclobber
+# -- because that is the cheapest atomic test-and-set a shell has: no fork, no
+# lock to release, and nothing left holding a lock if this process is killed
+# between the claim and the write. Whoever gets there first in a given minute
+# gets a zero exit and does the work; everyone else pays one failed open().
+#
+# A grid rather than "60s since the last append" also means the samples land at
+# predictable instants, which is what a sparkline and a slope both want. The one
+# thing it gives up is that two refreshes straddling a boundary can be seconds
+# apart -- harmless, and far cheaper than the alternative, which is reading the
+# tail of the file on every status line refresh to find out when the last append
+# was.
+slot="$STATE/.history-slot.$(( now / HISTORY_INTERVAL ))"
+set -C
+if true 2>/dev/null > "$slot"; then claimed=1; else claimed=0; fi
+set +C
+
+if [ "$claimed" = 1 ]; then
+  # Built from the snapshot with its own jq pass rather than reused from the HUD
+  # extraction below, which is only affordable because it runs once a minute
+  # instead of once a refresh. The HUD flattens every absent field to the string
+  # "-" and every percentage to its integer part, and both are lossy in ways
+  # that matter here: this file is the record, and "absent" has to stay
+  # distinguishable from 0 in it, not just on screen.
+  #
+  # A payload with no rate_limits at all -- Console billing, or a session whose
+  # first API response has not landed -- produces no line rather than a line of
+  # zeros. One window present and the other missing produces an explicit null,
+  # for the same reason. -a forces pure ASCII out of jq so the length check
+  # below counts bytes and characters as the same thing.
+  line=$(printf '%s' "$snapshot" | "$JQ" -c -a --argjson ts "$now" '
+    (.rate_limits // {}) as $r
+    | ($r.five_hour // {}) as $f
+    | ($r.seven_day // {}) as $s
+    | if $f.used_percentage == null and $s.used_percentage == null then empty
+      else {
+        ts:              $ts,
+        five_hour_pct:   $f.used_percentage,
+        five_hour_reset: $f.resets_at,
+        seven_day_pct:   $s.used_percentage,
+        seven_day_reset: $s.resets_at
+      }
+      end' 2>/dev/null)
+
+  # Appending is not the snapshot's write-then-rename problem: there is no whole
+  # file to swap, only a line to add to one other processes may be adding to at
+  # the same moment. What makes that safe is O_APPEND, which `>>` sets: POSIX
+  # requires the seek-to-end and the write to be one indivisible step, so two
+  # appenders can interleave lines but never characters. That guarantee only
+  # holds for a single write() call, which is why the line is checked against
+  # HISTORY_MAX_LINE first -- a real line is ~113 bytes, 512 is under both the
+  # 512-byte PIPE_BUF on macOS and stdio's buffer, and anything longer than that
+  # is a payload doing something unexpected and is dropped rather than risked.
+  if [ -n "$line" ] && [ "${#line}" -le "$HISTORY_MAX_LINE" ]; then
+    printf '%s\n' "$line" 2>/dev/null >> "$HISTORY"
+  fi
+
+  # Trimming is the one operation here that rewrites the file, so it is kept off
+  # the hot path twice over: it can only run inside a claimed bucket, and only
+  # when the file has grown past a cap a healthy week never reaches. The cost of
+  # deciding not to trim is one stat().
+  size=$(wc -c < "$HISTORY" 2>/dev/null)
+  size="${size//[!0-9]/}"
+  [ -n "$size" ] || size=0
+  if [ "$size" -gt "$HISTORY_MAX_BYTES" ]; then
+    # tail first, so the line ceiling is enforced by reading a bounded tail
+    # rather than the whole file, then awk drops anything past the age cutoff.
+    # awk rather than jq on purpose: jq aborts the whole stream on one malformed
+    # line, and a line torn by a crash mid-append is precisely the thing a trim
+    # should be quietly discarding. Anything without a well-formed leading ts is
+    # not a record this wrote and does not survive.
+    htmp="$STATE/.history.jsonl.tmp.$$"
+    if tail -n "$HISTORY_MAX_LINES" "$HISTORY" 2>/dev/null |
+       awk -v cutoff=$(( now - HISTORY_MAX_AGE_SEC )) '
+         match($0, /"ts":[0-9]+/) &&
+         substr($0, RSTART + 5, RLENGTH - 5) + 0 >= cutoff' 2>/dev/null > "$htmp"
+    then
+      # A concurrent appender holding the old inode loses at most its own line
+      # here. That is the accepted cost of not taking a lock: a trim happens on
+      # the order of days, and the alternative failure -- a reader seeing a
+      # half-rewritten file -- is the one worth ruling out.
+      mv -f "$htmp" "$HISTORY" 2>/dev/null
+    fi
+    rm -f "$htmp" 2>/dev/null
+  fi
+
+  # The stamp files are the only litter this leaves in the normal case, and a
+  # trim killed between writing its temp file and renaming it is the abnormal
+  # one -- worth sweeping too, because that temp is megabytes rather than zero
+  # bytes. Doing it from inside the claimed branch keeps it off the hot path,
+  # and the two-minute floor means neither a stamp nor a temp another process is
+  # still working under is ever a candidate.
+  find "$STATE" -maxdepth 1 -type f \
+    \( -name '.history-slot.*' -o -name '.history.jsonl.tmp.*' \) \
+    -mmin +2 -delete 2>/dev/null
+fi
 
 # ---------------------------------------------------------------- HUD line --
 

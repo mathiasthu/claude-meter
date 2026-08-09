@@ -11,7 +11,13 @@ import Combine
 final class SnapshotStore: ObservableObject {
 
     @Published private(set) var sessions: [Snapshot] = []
-    /// Advances once a second so SwiftUI recomputes countdowns and staleness.
+    /// Advances when something the app draws may have moved.
+    ///
+    /// The clock behind it runs once a second, but the value is only assigned
+    /// when a redraw could produce different pixels -- see `advance()`. Every
+    /// assignment is a redraw of every SwiftUI surface observing this store,
+    /// and for a background agent that lives on the desktop all day, a redraw
+    /// that lands on the same picture is pure cost.
     @Published private(set) var tick: Date = Date() { didSet { trackState() } }
 
     /// The state before the current one, and when it changed. The avatar morphs
@@ -22,6 +28,33 @@ final class SnapshotStore: ObservableObject {
     private var settledState: MeterState?
     private var priorState: MeterState?
     private var stateChangedAt: TimeInterval?
+
+    /// Everything the app renders from, at the precision it renders it.
+    ///
+    /// Two ticks that produce the same value here cannot produce different
+    /// pixels anywhere outside a popover, so the second of them is dropped.
+    /// The times are bucketed into whole minutes because that is what `Fmt`
+    /// prints: countdowns are "3h07m" and ages outside the popover are only
+    /// ever shown for data at least five minutes old, so a second of drift
+    /// cannot change a character.
+    private struct Presentation: Equatable {
+        let state: MeterState
+        let fiveHour: Double?
+        let sevenDay: Double?
+        let context: Double?
+        let sessions: Int
+        let fiveHourMinutes: Int?
+        let sevenDayMinutes: Int?
+        let ageMinutes: Int?
+    }
+
+    private var published: Presentation?
+
+    /// Surfaces that need the tick at its full one-second resolution. Only the
+    /// popover does -- it is the one place that prints an age below a minute
+    /// ("42s ago"). A count rather than a flag because the menubar's popover
+    /// and the avatar's can be open at the same time.
+    private var fineConsumers = 0
 
     /// Thresholds and the state-source choice live in settings; the store reads
     /// them so every surface derives the same state from the same rules.
@@ -59,7 +92,7 @@ final class SnapshotStore: ObservableObject {
         reload()
         startWatching()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tick = Date() }
+            Task { @MainActor in self?.advance() }
         }
         // Editing a threshold changes the derived state without any file
         // changing, so republish when settings do.
@@ -192,6 +225,68 @@ final class SnapshotStore: ObservableObject {
         settledState = now
     }
 
+    // MARK: - The clock
+
+    /// One turn of the one-second clock.
+    ///
+    /// The timer stays at 1 Hz and is not a candidate for being made coarser.
+    /// Three things change with nothing but the passage of time -- a session
+    /// ageing past `asleepAfter`, a snapshot going stale at the hour, and a
+    /// rate-limit window passing its `resets_at` -- and all three have to be
+    /// noticed promptly, because each one changes the state the whole app
+    /// draws from. Noticing them is arithmetic over a handful of structs and
+    /// costs nothing measurable.
+    ///
+    /// Republishing afterwards is the part that costs. So the tick is only
+    /// assigned when it can change what is on screen: when the reading, the
+    /// state or a minute-precision countdown moved, or while a popover is open
+    /// and wants seconds. In the state this app spends almost all its life in
+    /// -- nobody looking, nothing changing -- that is once a minute instead of
+    /// sixty times.
+    private func advance() {
+        let moved = noteState()
+        guard moved || fineConsumers > 0 else { return }
+        tick = Date()
+    }
+
+    /// Records the state and the reading, and reports whether either moved.
+    ///
+    /// Runs every second whether or not anything is published, because
+    /// `trackState` is what dates a state change, and the avatar's pose morph
+    /// starts from that date.
+    @discardableResult
+    private func noteState() -> Bool {
+        trackState()
+        let now = Date().timeIntervalSince1970
+        // floor, not truncation: a countdown that has just gone negative must
+        // not share a bucket with one that has not.
+        func minutes(until epoch: Double?) -> Int? {
+            epoch.map { Int(floor(($0 - now) / 60)) }
+        }
+        let current = Presentation(
+            state: state,
+            fiveHour: fiveHour,
+            sevenDay: sevenDay,
+            context: worstContext,
+            sessions: sessions.count,
+            fiveHourMinutes: minutes(until: fiveHourResetsAt),
+            sevenDayMinutes: minutes(until: sevenDayResetsAt),
+            ageMinutes: newestAge.map { Int(floor($0 / 60)) })
+        defer { published = current }
+        return current != published
+    }
+
+    /// Registers a surface that needs the tick every second rather than every
+    /// time the picture changes. Balance it with `endFineUpdates()`.
+    func beginFineUpdates() {
+        fineConsumers += 1
+        tick = Date()
+    }
+
+    func endFineUpdates() {
+        fineConsumers = max(0, fineConsumers - 1)
+    }
+
     /// The value the menubar title shows, per the user's metric choice.
     var menubarValue: Double? {
         switch settings.menubarMetric {
@@ -228,7 +323,10 @@ final class SnapshotStore: ObservableObject {
         }
         // Most recently active first -- that is the session you are looking at.
         sessions = loaded.sorted { $0.ts > $1.ts }
-        trackState()
+        // Assigning `sessions` has already published, so the reading recorded
+        // here is one the observers have seen; leaving it stale would make the
+        // next tick republish the same picture a second later.
+        noteState()
     }
 
     // MARK: - Watching

@@ -4,8 +4,8 @@
 
 Built 2026-08-07; visual system, click-to-open and the plateless avatar landed
 2026-08-08, followed the same day by the installer rewrite and the animated
-pixel creature. Menubar item + floating avatar + settings window + status line
-HUD, all live. `com.momentumminds.claude-meter` LaunchAgent loaded, `RunAtLoad`
+pixel creature; the collector's history trail landed 2026-08-09. Menubar item +
+floating avatar + settings window + status line HUD, all live. `com.momentumminds.claude-meter` LaunchAgent loaded, `RunAtLoad`
 + `KeepAlive`, deployed from `dist/ClaudeMeter.app`.
 
 Up to 2026-08-08 the only machine this had ever worked on was this one. The
@@ -20,11 +20,12 @@ Verified against real payloads, not synthetic ones:
 
 - Collector: 8 payload shapes (full, no `rate_limits`, null percentages,
   elapsed reset, 1M context, empty stdin, malformed stdin, path-unsafe
-  session_id). Runs in ~50 ms against a 3 s chain deadline.
-- Store, settings and styles: `scripts/selftest.sh`, 36 assertions, all pass.
-- Installer and hooks: `scripts/selftest-install.sh`, 30 assertions, all pass —
-  against a fake `$HOME` and a fake checkout, so none of it touches this
-  machine.
+  session_id). Runs in ~60 ms against a 3 s chain deadline; the one refresh a
+  minute that also appends history is ~70 ms.
+- Store, settings and styles: `scripts/selftest.sh`, 46 assertions, all pass.
+- Installer, hooks and the history trail: `scripts/selftest-install.sh`, 44
+  assertions, all pass — against a fake `$HOME`, a fake checkout and a stubbed
+  clock, so none of it touches this machine.
 - Decode: real snapshots from two concurrent sessions decode with correct
   names, percentages, token counts, costs, and reset countdowns.
 - Every style in every state: rendered to `docs/avatar-states.png` and looked
@@ -117,6 +118,81 @@ binary's internals mention `seven_day_opus`, `seven_day_sonnet`,
 a live payload. The collector passes the whole object through, so if they ever
 show up they land in the snapshot without a code change; the app would need
 updating to display them.
+
+## The history trail
+
+Landed 2026-08-09. Data layer only — no Swift, nothing reads it yet. The point
+was to start accumulating, because until this existed every reading the machine
+had ever seen was discarded: the snapshot is an overwrite, `SessionEnd` deletes
+it, and the 24 h sweep clears the rest. Burn rate and "will this task outlive
+the window" were not hard to build, they were impossible.
+
+`$STATE/history.jsonl`, one JSON object per line:
+
+```json
+{"ts":1786243870,"five_hour_pct":11,"five_hour_reset":1786253400,"seven_day_pct":54,"seven_day_reset":1786474800}
+```
+
+Five fields and no more, because the line length is load-bearing (see below).
+Everything else worth having is either per-session, and so belongs in the
+snapshot, or derivable — the reset timestamps are what turn a percentage into a
+rate, and they are carried rather than assumed because the window they belong to
+rolls over underneath you.
+
+Four decisions, each of which has a failure mode behind it:
+
+- **Sampled on a one-minute wall-clock grid, not throttled per process.** Both
+  windows are account-level, so every open session sees the same two numbers and
+  would each write them; three sessions mid-answer would append several
+  near-identical lines a second. The grid also puts samples at predictable
+  instants, which is what a sparkline and a slope both want. The cost is that
+  two refreshes straddling a boundary can land seconds apart. Accepted — the
+  alternative is reading the tail of the file on every status line refresh.
+- **The slot is claimed with `set -C; true 2>/dev/null > "$slot"`.** Noclobber
+  turns `>` into `O_CREAT|O_EXCL`, which is the cheapest atomic test-and-set a
+  shell has: no fork, no lock to release, and nothing left holding a lock if the
+  process is killed between claim and write. `mkdir` would also be atomic and
+  costs a fork+exec on a path that runs on every assistant message. The stamp
+  files (`.history-slot.<epoch/60>`) are swept from inside the claimed branch
+  with a two-minute floor, so a stamp another process is still working under is
+  never a candidate.
+- **Appending is not the snapshot's write-then-rename problem.** There is no
+  whole file to swap. What makes it safe is `O_APPEND`, where POSIX requires the
+  seek-to-end and the write to be one indivisible step — but only for a single
+  `write()`. Hence `HISTORY_MAX_LINE=512`: under macOS's 512-byte `PIPE_BUF` and
+  under stdio's buffer, so one `printf` is one syscall. A real line is 113
+  bytes; anything over the cap is a payload doing something unexpected and is
+  dropped rather than risked. jq is given `-a` so its output is pure ASCII and
+  `${#line}` counts bytes, not characters.
+- **Eight days of retention, trimmed only past 2 MB.** Eight rather than seven
+  so a full 7-day window is covered at every instant, not just after a trim. The
+  byte cap is not the retention rule, only the trigger — it decides when a
+  rewrite is worth paying for, and `HISTORY_MAX_AGE_SEC` decides what survives
+  one. Trimming is `tail -n 20000 | awk`, not jq: jq aborts the whole stream on
+  one malformed line, and a line torn by a crash mid-append is exactly what a
+  trim should be quietly discarding. Anything without a well-formed leading
+  `"ts":` does not survive. A concurrent appender holding the old inode across
+  the `mv` loses its own line; that is the accepted cost of not taking a lock,
+  against a trim that happens on the order of days.
+
+Absent is still not zero, as everywhere else here: no `rate_limits` appends no
+line at all, and one window present with the other missing writes an explicit
+`null`.
+
+One pre-existing bug fell out of the failure-policy work. `mkdir -p "$SESSIONS"
+|| exit 0` meant an unwritable state directory took the **HUD** down with the
+snapshots, even though the HUD needs nothing from disk. It is now `|| true`,
+which makes a failing `open()` reachable for the first time — so every write in
+the script now puts `2>/dev/null` *before* its output redirection. Bash applies
+redirections left to right and reports a failed one on whatever fd 2 is at that
+instant, so the familiar trailing form leaks "No such file or directory" to the
+terminal on exactly the paths this is meant to survive. Four call sites; the
+selftest asserts stderr is empty.
+
+Cost on the hot path is unmeasurable — the 59 refreshes in a minute that lose
+the claim pay one failed `open()` and no fork (median delta over 200 paired runs
+was −0.7 ms, i.e. noise). The one that wins pays ~12 ms for a second jq pass, a
+`wc` and a `find`. A trim run is ~270 ms, days apart, against a 3 s deadline.
 
 ## The pixel creature moves
 
@@ -390,6 +466,38 @@ Two rules the tests pin down, because both are easy to break later:
 should re-derive it by testing the percentage against zero, since a genuinely
 empty window and a rolled-over one are not the same thing.
 
+## Every failure looked identical, so now something says which one it is
+
+`bin/claude-meter-doctor`. Read-only, safe to run at any time, exits non-zero
+when something is actually broken and zero on warnings alone.
+
+The problem it solves is not that the checks are hard — it is that an unwired
+status line, a missing `jq`, Console billing, a moved checkout and "you have
+not sent a message yet" all render as the same empty menubar item, with no
+error anywhere. Nothing in the app could tell them apart either.
+
+The check worth knowing about: **`last-raw.json` is written on the collector's
+first invocation, before it parses anything**, so its absence is proof Claude
+Code has never called it. That is the one fact that separates "not wired" from
+"wired and idle", and everything else in the Data section is downstream of it.
+
+Two things the tests pin, because both were bugs found while writing them:
+
+- A section that cannot run must say so. When `settings.json` will not parse,
+  the Hooks section printed nothing at all, which reads as "fine" rather than
+  "could not look".
+- `resets_at` arrives as a float, and bash's `-le` rejects a float silently
+  with `2>/dev/null` swallowing the complaint — so the "this window has already
+  reset" branch never fired. It is floored in the `jq` call now.
+
+It also distinguishes this project's own collector at a different path from a
+status line that belongs to someone else, because the advice differs: one is
+`./install.sh`, the other must not be clobbered.
+
+Covered by six scenarios in `scripts/selftest-install.sh` against synthetic
+broken machines — wired, unwired, foreign checkout, never-run, Console billing,
+no jq.
+
 ## Gotchas
 
 - **`@State` does not compile on this machine.** SwiftUI's macro plugin
@@ -562,31 +670,95 @@ guarding a case that has not actually been observed.
 - The pixel creature's asleep and stale states are grey for the same reason and
   have the same caveat.
 
+## What the idle CPU was going on
+
+Three causes, all of them measured before being touched, and none of them the
+avatar. Interleaved runs against a fixed synthetic state, avatar hidden, 8 s
+settle then a 30 s sample, medians of three or more reps:
+
+| scenario | HEAD | fixed |
+|---|---|---|
+| idle, popover never opened | 1.27% | 0.03% |
+| idle, popover opened once and closed | 2.50% | 0.03% |
+
+**A `.id` is not a refresh.** `SessionListView` was keyed on
+`.id(store.tick…)`, and a changing id tells SwiftUI this is a *different view*,
+not that the old one needs recomputing — so the whole 296 pt tree was destroyed
+and rebuilt every second. The `@ObservedObject` was already invalidating the
+body; the id only decided whether the views were reused or thrown away. Removing
+it leaves the per-second refresh exactly where it was: with the popover held
+open, both builds evaluate the body five times per five seconds, so the
+countdowns and the sub-minute ages still move.
+
+**The menubar item was redrawn sixty times a minute to say the same thing.**
+`refreshStatusItem()` built a fresh `NSImage` and a fresh `NSAttributedString`
+on every tick, but `Fmt` rounds percentages to whole numbers and countdowns and
+ages to whole minutes, so fifty-nine of those sixty were identical. It now
+compares a `StatusItemContents` value first and returns. That alone is
+essentially the whole no-popover idle cost: 1.27% → 0.03%.
+
+**A closed popover kept redrawing all day.** `contentViewController` was
+assigned on open and never cleared, so the `NSHostingController` outlived the
+popover and SwiftUI kept evaluating its body against every store update. Counted
+inside the app: after the popover closed, HEAD still ran the dropdown's body
+once a second forever. Both popovers are now delegated to `MenubarController`
+and released in `popoverDidClose`, and the count drops to zero. Of HEAD's 2.50%
+in that scenario, 1.39% was the leak — 0.87% of it the teardown-and-rebuild the
+`.id` forced, and 0.52% plain invisible re-rendering.
+
+### The tick is still 1 Hz; it just stopped shouting
+
+The timer was left alone on purpose. Three things change with nothing but the
+passage of time — a session ageing past `asleepAfter`, a snapshot going stale at
+the hour, a rate-limit window passing its `resets_at` — and each one changes the
+state the whole app draws from, so all three have to be noticed promptly.
+Noticing them is arithmetic over a handful of structs and costs nothing
+measurable. Publishing is the expensive half: every assignment to `tick` redraws
+every SwiftUI surface observing the store.
+
+So `advance()` publishes only when it can change what is on screen. `noteState()`
+compares state, all three readings, the session count, and the two countdowns
+and the newest age *bucketed into whole minutes* — the precision `Fmt` actually
+prints. Measured over 95 s in a settled state: 95 publishes on HEAD, 4 on this.
+
+The one surface that needs seconds is the popover, which prints "42s ago". It
+registers with `beginFineUpdates()` on open and is released in
+`popoverDidClose`, and while it is open the tick is back to a flat 1 Hz —
+verified by the same body counter.
+
+Two consequences worth knowing:
+
+- **The status item cache has to be dropped on an appearance change.** Nothing
+  in `StatusItemContents` mentions light or dark, because the icon resolves
+  `labelColor` at draw time and the title colour is a dynamic `NSColor`. That
+  used to self-correct within a second; with the tick quiet it could wait a
+  minute, so `MenubarController` observes `NSApp.effectiveAppearance` and nils
+  the cache.
+- **The avatar's tooltip can lag a minute.** It is rebuilt with the body, and
+  the body no longer rebuilds every second. Every time string in it is gated to
+  data at least five minutes old, so it is minute-precision anyway.
+
+The pixel creature was never at risk: `PixelStepSchedule` parks at a 5 s floor
+rather than at infinity precisely so a schedule that is re-read rarely cannot
+strand the sprite on a stale frame.
+
 ## Next steps
 
 The audit that produced the installer fixes above ranked the rest of it. In
 order, because each one unblocks the next:
 
-- **Make failure legible.** Every failure mode still renders as an empty
-  menubar item: unwired status line, missing jq, Console billing, no session
-  open, moved checkout. A `bin/claude-meter-doctor` that checks each of those
-  and prints pass/fail is the single highest-value thing left. `last-raw.json`
-  is written before any parsing, so its absence proves the collector has never
-  run — which is the one signal that distinguishes "not connected" from "idle",
-  and `SnapshotStore.state` currently returns `.empty` for both.
-- **Pay back the idle CPU.** Baseline is ~1.8% of a core before the creature
-  moves and 2.5–6.7% after, against a target of 0.5%. Three known causes, none
-  of them the avatar: `.id(store.tick...)` at `SessionListView.swift:31` tears
-  down and rebuilds a 296 pt view tree every second; `refreshStatusItem()`
-  rebuilds an `NSImage` and an attributed title every second for strings that
-  change once a minute; and `popover.contentViewController` is never cleared on
-  close, so both hosting controllers keep rebuilding invisibly — that last one
-  is the permanent step from ~1.7% to ~4.6% after the first popover open.
-- **Keep one line of history.** A `{ts, five_hour_pct, resets_at}` append to a
-  `history.jsonl` after the snapshot write, trimmed by the same sweep, is the
-  entire data dependency for burn rate and for "will this run die halfway" —
-  the question the current architecture structurally cannot answer, because
-  `SessionEnd` and the 24 h sweep mean nothing is ever retained.
+- **Measure the idle CPU with the avatar on screen.** The three causes below
+  are paid off, but every measurement behind them was taken with
+  `avatar.visible` off, because an agent measuring this must not put a floating
+  window on someone's desktop. What the sprite costs per redraw, and therefore
+  what the whole app now idles at in its shipping configuration, has not been
+  measured since the tick stopped firing sixty times a minute.
+- **Read the history trail.** The data layer landed 2026-08-09 (see above) and
+  is filling up now; nothing consumes it yet. Burn rate from the last two
+  samples, a 5-hour sparkline in the popover, and "this task will hit the wall
+  before the window resets" are all a decode away. A Swift reader wants to
+  stream the tail rather than parse the whole file, and to skip a line it cannot
+  decode rather than give up on the file.
 - Decide whether the pixel creature sits too high in its ground. Content spans
   y 6–31.5 in a 48 pt box, so there is 6 pt above and 16.5 pt below. It is
   faithful to the spec's coordinates, which is why it was left alone; shifting
@@ -608,8 +780,9 @@ order, because each one unblocks the next:
 ```bash
 ./install.sh                 # build + wire + load. idempotent.
 ./scripts/build-app.sh       # rebuild the bundle only
-./scripts/selftest.sh        # 36 headless assertions: store, settings, styles
-./scripts/selftest-install.sh # 30 assertions: installer + hooks, fake $HOME
+./scripts/selftest.sh        # 46 headless assertions: store, settings, styles
+./scripts/selftest-install.sh # 55 assertions: installer, hooks, collector, doctor
+bin/claude-meter-doctor      # why is the menubar empty. read-only.
 launchctl kickstart -k gui/$UID/com.momentumminds.claude-meter   # restart the app
 
 ./dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --render-grid /tmp/s.png  # every style, every state
@@ -620,4 +793,5 @@ launchctl kickstart -k gui/$UID/com.momentumminds.claude-meter   # restart the a
 echo '{...}' | bin/claude-meter-collect                    # exercise the collector
 jq . ~/.local/state/claude-meter/last-raw.json             # what Claude Code last sent
 ls ~/.local/state/claude-meter/sessions/                   # one file per live session
+tail -20 ~/.local/state/claude-meter/history.jsonl         # the rate-limit trail, one line/min
 ```

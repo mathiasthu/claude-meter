@@ -1,0 +1,292 @@
+#!/bin/bash
+# claude-meter doctor -- says which part of the wiring is broken.
+#
+# Every failure in this project looks identical from the outside: an empty
+# menubar item. An unwired status line, a missing jq, Console billing, a moved
+# checkout, a session that has simply not sent anything yet -- all of them show
+# nothing, and none of them say why. That is the single worst thing about
+# installing this, so this script exists to name the cause.
+#
+# It only reads. Nothing here changes a file, and it is safe to run at any time.
+#
+#   bin/claude-meter-doctor
+#
+# Exit status is 0 when the collector is wired and has delivered data, 1 when
+# something is actually broken. Warnings on their own do not fail the run.
+set -u
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+COLLECT="$ROOT/bin/claude-meter-collect"
+SETTINGS="$HOME/.claude/settings.json"
+CHAIN="$HOME/.kickbacks/cli-prev-statusline.json"
+STATE="${CLAUDE_METER_STATE:-$HOME/.local/state/claude-meter}"
+LABEL="com.momentumminds.claude-meter"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+
+if [ -t 1 ]; then
+  GRN=$'\033[32m'; RED=$'\033[31m'; YLW=$'\033[33m'; DIM=$'\033[2m'; RST=$'\033[0m'
+else
+  GRN=""; RED=""; YLW=""; DIM=""; RST=""
+fi
+
+fails=0
+warns=0
+ok()   { printf '  %sok%s    %s\n' "$GRN" "$RST" "$1"; }
+bad()  { printf '  %sfail%s  %s\n' "$RED" "$RST" "$1"; fails=$((fails + 1)); }
+warn() { printf '  %swarn%s  %s\n' "$YLW" "$RST" "$1"; warns=$((warns + 1)); }
+fix()  { printf '        %s%s%s\n' "$DIM" "$1" "$RST"; }
+head_() { printf '\n%s\n' "$1"; }
+
+# Whole minutes, then hours, then days -- the same shape the UI uses, because
+# "3h07m ago" is easier to judge against "when did I last run something" than a
+# raw second count.
+ago() {
+  local s=$1
+  if   [ "$s" -lt 90 ];    then printf '%ds ago' "$s"
+  elif [ "$s" -lt 5400 ];  then printf '%dm ago' $(( s / 60 ))
+  elif [ "$s" -lt 172800 ]; then printf '%dh%02dm ago' $(( s / 3600 )) $(( (s % 3600) / 60 ))
+  else printf '%dd ago' $(( s / 86400 ))
+  fi
+}
+
+printf 'claude-meter doctor\n'
+printf '%scheckout: %s%s\n' "$DIM" "$ROOT" "$RST"
+
+# ------------------------------------------------------------ prerequisites --
+
+head_ "Prerequisites"
+
+JQ="$(command -v jq || true)"
+if [ -z "$JQ" ]; then
+  bad "jq not found on PATH"
+  fix "brew install jq"
+elif ! "$JQ" -n . >/dev/null 2>&1; then
+  bad "jq at $JQ will not run"
+  fix "brew install jq"
+  JQ=""
+else
+  ok "jq at $JQ"
+fi
+
+if [ -x "$COLLECT" ]; then
+  ok "collector present and executable"
+else
+  bad "collector missing or not executable at $COLLECT"
+  fix "git -C $ROOT checkout bin/claude-meter-collect && chmod +x bin/claude-meter-collect"
+fi
+
+if [ -x "$ROOT/dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter" ]; then
+  ok "app bundle built"
+else
+  bad "no app bundle at $ROOT/dist/ClaudeMeter.app"
+  fix "./install.sh"
+fi
+
+# ------------------------------------------------------------- settings.json --
+
+head_ "Claude Code settings"
+
+settings_ok=0
+if [ ! -f "$SETTINGS" ]; then
+  bad "$SETTINGS does not exist"
+  fix "start Claude Code once to create it, then re-run ./install.sh"
+elif [ -z "$JQ" ]; then
+  warn "cannot read settings.json without jq"
+elif ! "$JQ" -e . "$SETTINGS" >/dev/null 2>&1; then
+  bad "$SETTINGS is not valid JSON"
+  fix "fix or move it, then re-run ./install.sh"
+else
+  ok "settings.json parses"
+  settings_ok=1
+fi
+
+# ---------------------------------------------------------------- statusline --
+
+# This is the one that matters. rate_limits and context_window reach this
+# machine through the status line and nowhere else, so if this section fails
+# nothing downstream can possibly work, however healthy it looks.
+
+head_ "Status line (the only channel that carries rate limits)"
+
+wired=""
+via=""
+if [ -n "$JQ" ]; then
+  if [ -d "$HOME/.kickbacks" ]; then
+    via="the kickbacks chain"
+    [ -f "$CHAIN" ] && wired=$("$JQ" -r '.statusLine.command // empty' "$CHAIN" 2>/dev/null)
+    if [ ! -f "$CHAIN" ]; then
+      bad "kickbacks is installed but $CHAIN does not exist"
+      fix "./install.sh   (the SessionStart hook also recreates it)"
+    fi
+  else
+    via="settings.json"
+    [ "$settings_ok" = 1 ] &&
+      wired=$("$JQ" -r '.statusLine.command // empty' "$SETTINGS" 2>/dev/null)
+  fi
+fi
+
+if [ -n "$wired" ] && [ "$wired" = "$COLLECT" ]; then
+  ok "collector is wired via $via"
+elif [ -n "$wired" ]; then
+  bad "the status line points somewhere else"
+  fix "found:    $wired"
+  fix "expected: $COLLECT"
+  case "$wired" in
+    *claude-meter-collect)
+      # Ours, from somewhere else -- almost always a checkout that was moved
+      # or a second clone, not a deliberate choice worth preserving.
+      fix "that is this project's collector from a different checkout."
+      fix "./install.sh   from here repoints it"
+      ;;
+    *)
+      if [ "$via" = "settings.json" ]; then
+        fix "if that command is yours, chain the collector from inside it -- it"
+        fix "reads the same stdin and prints one line."
+      else
+        fix "./install.sh   re-asserts the chain"
+      fi
+      ;;
+  esac
+elif [ -n "$JQ" ]; then
+  bad "no status line command is set in $via"
+  fix "./install.sh"
+fi
+
+# Whether the checkout has moved out from under an install done elsewhere.
+if [ -n "$wired" ] && [ "$wired" != "$COLLECT" ] && [ ! -e "$wired" ]; then
+  fix "note: that path does not exist, so the checkout was probably moved."
+  fix "re-running ./install.sh from here repoints everything."
+fi
+
+# --------------------------------------------------------------------- hooks --
+
+head_ "Hooks"
+
+if [ "$settings_ok" != 1 ]; then
+  # An empty section reads as "nothing to say" when it means "could not look".
+  warn "not checked -- settings.json could not be read"
+else
+  for pair in "SessionStart:claude-meter-session-start" "SessionEnd:claude-meter-session-end"; do
+    event="${pair%%:*}"; script="${pair##*:}"
+    want="$ROOT/bin/$script"
+    if "$JQ" -e --arg c "$want" '[.hooks[]?[]?.hooks[]?.command] | index($c) != null' \
+         "$SETTINGS" >/dev/null 2>&1; then
+      ok "$event registered"
+    else
+      other=$("$JQ" -r --arg e "$event" \
+        '[.hooks[$e][]?.hooks[]?.command] | map(select(test("claude-meter"))) | first // empty' \
+        "$SETTINGS" 2>/dev/null)
+      if [ -n "$other" ]; then
+        bad "$event points at a different checkout"
+        fix "found:    $other"
+        fix "expected: $want"
+        fix "./install.sh"
+      else
+        warn "$event is not registered"
+        if [ "$event" = SessionEnd ]; then
+          fix "closed sessions will keep showing a frozen percentage for up to an hour"
+        else
+          fix "the status line will not repair itself if something clobbers it"
+        fi
+        fix "./install.sh"
+      fi
+    fi
+  done
+fi
+
+# --------------------------------------------------------------- launchagent --
+
+head_ "Background app"
+
+if [ ! -f "$PLIST" ]; then
+  bad "no LaunchAgent at $PLIST"
+  fix "./install.sh"
+elif launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; then
+  pid=$(launchctl print "gui/$UID/$LABEL" 2>/dev/null |
+          awk '/^[[:space:]]*pid = /{print $3; exit}')
+  if [ -n "$pid" ]; then
+    ok "running (pid $pid)"
+  else
+    warn "loaded but not running"
+    fix "launchctl kickstart -k gui/$UID/$LABEL"
+    fix "if it will not stay up: log show --predicate 'process == \"ClaudeMeter\"' --last 10m"
+  fi
+else
+  bad "LaunchAgent is not loaded"
+  fix "launchctl bootstrap gui/$UID $PLIST"
+fi
+
+# ---------------------------------------------------------------------- data --
+
+head_ "Data"
+
+raw="$STATE/last-raw.json"
+now=$(date +%s)
+
+if [ ! -d "$STATE" ]; then
+  bad "no state directory at $STATE"
+  fix "the collector has never run. Send one message in a Claude Code session."
+elif [ ! -f "$raw" ]; then
+  # This file is written before any parsing happens, so its absence is proof
+  # the collector has never been invoked -- which separates "not wired" from
+  # "wired, but you have not sent a message yet".
+  bad "the collector has never run"
+  fix "$raw is written on the collector's first invocation, before it parses"
+  fix "anything, so its absence means Claude Code has never called it."
+  fix "Send one message in a session. If nothing appears, the status line above"
+  fix "is not really wired."
+else
+  mtime=$(stat -f %m "$raw" 2>/dev/null || echo "$now")
+  ok "last status line refresh $(ago $(( now - mtime )))"
+
+  if [ -n "$JQ" ]; then
+    if "$JQ" -e '.rate_limits.five_hour.used_percentage != null' "$raw" >/dev/null 2>&1; then
+      five=$("$JQ" -r '.rate_limits.five_hour.used_percentage | floor' "$raw" 2>/dev/null)
+      # Floored, because resets_at arrives as a float and bash's integer test
+      # rejects one silently -- which would leave the reset never detected.
+      reset=$("$JQ" -r '.rate_limits.five_hour.resets_at // empty | floor' "$raw" 2>/dev/null)
+      if [ -n "$reset" ] && [ "$reset" -le "$now" ] 2>/dev/null; then
+        ok "5-hour window reported ${five}%, and has since reset ($(ago $(( now - reset ))))"
+      else
+        ok "5-hour window at ${five}%"
+      fi
+    else
+      warn "no rate limits in the last payload"
+      fix "rate_limits needs a Claude.ai subscription and one API response. It is"
+      fix "absent for Console billing, and absent in a new session until the first"
+      fix "reply comes back. Context and cost still work without it."
+    fi
+  fi
+fi
+
+live=0
+total=0
+if [ -d "$STATE/sessions" ]; then
+  for f in "$STATE/sessions"/*.json; do
+    [ -e "$f" ] || continue
+    total=$((total + 1))
+    m=$(stat -f %m "$f" 2>/dev/null || echo 0)
+    [ $(( now - m )) -lt 300 ] && live=$((live + 1))
+  done
+fi
+if [ "$total" -eq 0 ]; then
+  ok "no session snapshots (nothing running)"
+else
+  ok "$total session snapshot(s), $live active in the last 5 minutes"
+fi
+
+# -------------------------------------------------------------------- result --
+
+printf '\n'
+if [ "$fails" -gt 0 ]; then
+  printf '%s%d problem(s)%s' "$RED" "$fails" "$RST"
+  [ "$warns" -gt 0 ] && printf ', %d warning(s)' "$warns"
+  printf '. Fix the first one and re-run -- later checks depend on earlier ones.\n'
+  exit 1
+fi
+if [ "$warns" -gt 0 ]; then
+  printf '%sWired, with %d warning(s).%s\n' "$YLW" "$warns" "$RST"
+  exit 0
+fi
+printf '%sEverything is wired.%s\n' "$GRN" "$RST"
+exit 0
