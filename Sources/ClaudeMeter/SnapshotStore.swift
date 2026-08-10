@@ -121,8 +121,13 @@ final class SnapshotStore: ObservableObject {
         return nil
     }
 
+    /// Sessions that are doing something, judged on transcript activity rather
+    /// than on when the status line last fired — see `Snapshot.activityAge`.
+    /// A session running a long subagent is live even though its numbers are
+    /// not; `newestAge` is what decides whether those numbers can be trusted,
+    /// and the two are deliberately separate.
     var liveSessions: [Snapshot] {
-        sessions.filter { $0.age < settings.thresholds.asleepAfter }
+        sessions.filter { $0.activityAge < settings.thresholds.asleepAfter }
     }
 
     var fiveHour: Double? { Self.current(accountLimits?.limits.fiveHour) }

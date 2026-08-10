@@ -12,7 +12,7 @@ try? FileManager.default.createDirectory(at: sessions, withIntermediateDirectori
 setenv("CLAUDE_METER_STATE", tmp.path, 1)
 
 func write(_ id: String, ctx: Double?, five: Double?, agoSeconds: Double = 0,
-           fiveResetsIn: Double = 3600) {
+           fiveResetsIn: Double = 3600, transcript: String? = nil) {
     let ts = Date().timeIntervalSince1970 - agoSeconds
     let ctxJSON = ctx.map { "\($0)" } ?? "null"
     let rl = five.map {
@@ -22,7 +22,8 @@ func write(_ id: String, ctx: Double?, five: Double?, agoSeconds: Double = 0,
     {"ts":\(ts),"session_id":"\(id)","session_name":"\(id)","cwd":"/tmp/\(id)","model":"Opus","effort":"high","fast_mode":false,
      "context":{"used_percentage":\(ctxJSON),"remaining_percentage":null,"total_input_tokens":1000,"total_output_tokens":10,"size":200000,"current_usage":null},
      "exceeds_200k":false,"cost":{"total_cost_usd":1.0,"total_duration_ms":1000,"total_api_duration_ms":1,"lines_added":0,"lines_removed":0},
-     "rate_limits":\(rl)}
+     "rate_limits":\(rl),
+     "transcript":\(transcript.map { "\"\($0)\"" } ?? "null")}
     """
     // Mirror the collector's `mv -f`: atomic AND replacing. Plain
     // moveItem() throws when the destination exists, which silently turns a
@@ -89,6 +90,46 @@ MainActor.assumeIsolated {
     check("old snapshot not live", store.liveSessions.isEmpty, "live=\(store.liveSessions.count)")
     check("no live sessions -> asleep", store.state == .asleep, "\(store.state)")
     check("old snapshot still listed", store.sessions.count == 1, "\(store.sessions.count)")
+
+    // --- a working session is not asleep just because it is quiet ---
+    //
+    // The status line fires on assistant messages, so a session that hands off
+    // to a subagent stops refreshing while it is still working. Judging
+    // liveness on the snapshot alone called that asleep; the transcript keeps
+    // being appended, so its mtime is the honest signal.
+    for f in (try? FileManager.default.contentsOfDirectory(at: sessions, includingPropertiesForKeys: nil)) ?? [] {
+        try? FileManager.default.removeItem(at: f)
+    }
+    let transcript = sessions.deletingLastPathComponent()
+        .appendingPathComponent("fake-transcript.jsonl")
+    try? "{}".write(to: transcript, atomically: true, encoding: .utf8)
+
+    write("busy", ctx: 30, five: 20, agoSeconds: 3600, transcript: transcript.path)
+    store.reload()
+    check("a fresh transcript keeps an old snapshot live",
+          store.liveSessions.count == 1, "live=\(store.liveSessions.count)")
+    check("and the state is not asleep", store.state != .asleep, "\(store.state)")
+    // The numbers are still an hour old, and must still say so.
+    check("but the data age is unchanged",
+          (store.newestAge ?? 0) >= 3600, "\(String(describing: store.newestAge))")
+    check("so it reads stale, not calm", store.state == .stale, "\(store.state)")
+
+    // Backwards compatibility: snapshots written before the field existed.
+    write("nofield", ctx: 30, five: 20, agoSeconds: 3600)
+    try? FileManager.default.removeItem(at: sessions.appendingPathComponent("busy.json"))
+    store.reload()
+    check("no transcript field falls back to the snapshot age",
+          store.liveSessions.isEmpty, "live=\(store.liveSessions.count)")
+
+    // A path that no longer resolves must not resurrect a dead session.
+    write("gone", ctx: 30, five: 20, agoSeconds: 3600,
+          transcript: "/nonexistent/definitely/not/here.jsonl")
+    try? FileManager.default.removeItem(at: sessions.appendingPathComponent("nofield.json"))
+    store.reload()
+    check("a missing transcript falls back too", store.liveSessions.isEmpty,
+          "live=\(store.liveSessions.count)")
+
+    try? FileManager.default.removeItem(at: transcript)
 
     // --- a window past its reset reads zero, not its last value ---
     //

@@ -108,6 +108,15 @@ snapshot=$(printf '%s' "$input" | "$JQ" -c --argjson ts "$now" '
   session_name: (.session_name // null),
   cwd:          (.workspace.current_dir // .cwd // null),
   project_dir:  (.workspace.project_dir // null),
+  # Recorded so the app can tell "this session is working" from "this session
+  # has stopped". The status line only fires on assistant messages, so a
+  # session that dispatches a long subagent goes quiet here while it is very
+  # much alive -- observed at 3h between refreshes on a session whose
+  # transcript had been appended 18 minutes earlier. The transcript keeps
+  # growing throughout, so its mtime is the honest activity signal. The path
+  # is stored rather than a timestamp because the useful reading is the one
+  # taken when the app looks, not the one taken when this last ran.
+  transcript:   (.transcript_path // null),
   model:        (.model.display_name // null),
   model_id:     (.model.id // null),
   version:      (.version // null),

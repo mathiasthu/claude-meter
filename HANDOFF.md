@@ -262,7 +262,8 @@ state runs, and parks when a state has none. Redraws went from ~30/s to between
 one-a-second redraw the store's tick already forced before any of this.
 
 Measured with a 20 s sample after an 8 s settle, alternating binaries, three
-reps each, in a fixed synthetic state (`scratchpad/bench.sh`):
+reps each, in a fixed synthetic state (the harness lived in a scratch
+directory and is gone; the method is described above and is easy to rebuild):
 
 | state | HEAD | this | redraws/s |
 |---|---|---|---|
@@ -497,6 +498,93 @@ status line that belongs to someone else, because the advice differs: one is
 Covered by six scenarios in `scripts/selftest-install.sh` against synthetic
 broken machines — wired, unwired, foreign checkout, never-run, Console billing,
 no jq.
+
+## The menubar burn is the machine, not this app
+
+A 26 h-old instance measured 14.3–14.9% of a core against 0.78–1.25% for a
+freshly launched one, which looked exactly like a leak. It is not.
+
+**Onset is 2–5 minutes, not hours.** Every instance sits near zero for its
+first couple of minutes and reaches 3–6% by minute five, so a "fresh process"
+sample taken at two minutes lands before the onset and manufactures an
+apparent 15× step that is really a measurement artefact. The lifetime average
+of that 26 h process argues the same way: 4.44% against a 14.6% endpoint is
+*below* what even a quadratic ramp would produce, and is what an intermittent
+external step to ~14% that is present about a third of the time looks like.
+
+**It reproduces in a 40-line app containing nothing but an `NSStatusItem`**,
+and does not reproduce at all in an `NSApplication` with `.prohibited`
+activation policy and no windows (0.05 s of CPU in 20 s), nor behind a 1×1
+transparent window. `sample` on a hot instance shows **no ClaudeMeter frames in
+the busy path at all** — it is `CGSDatagramReadStream::dispatchMainQueueDatagrams`
+→ `remote_context_notify` → tracking-area and structural-region updates,
+driven by `[AppKit:OcclusionDetection] Window 0x0 event shape became non empty`
+arriving 150–320 times a second and costing roughly 0.3 ms each.
+
+Every status-item app on the machine pays it equally. Measured at one instant:
+WindowServer 96.7%, MenuBarAgent 38.0%, TwinMind 32.1%, SoundSource 22.9%,
+goldfish_d 18.4%, AlDente 10.4%, **ClaudeMeter 10.3%**, Tailscale 9.9%. AlDente
+is a battery utility and Tailscale is a VPN; neither shares a line of code with
+this project.
+
+So the real idle cost of this app is the pre-onset figure — around 0.03% with
+the avatar hidden, 0.6–0.95% with it visible — and the rest is rent charged by
+whatever is driving WindowServer. Chasing it belongs outside this repo;
+goldfish's continuous capture, the TwinMind audio stack and a LaunchServices
+re-registration loop around an app whose display name flips `node` ↔ `npm` are
+the standing suspects.
+
+**Before optimising anything in this app on the strength of a CPU number,
+measure a bare status-item control app at the same instant.** Ruled out along
+the way, each with evidence: `PixelStepSchedule` and `PixelCoding` drift (a
+pure-function harness gives byte-identical entry counts at now, +1 h, +6 h,
++26 h and +7 d), unbalanced `beginFineUpdates()` (27 publishes in 930 s), the
+file-system watcher (40 events, 40 reloads, no re-registration), and anything
+accumulating in-process (`NSApp.windows` = 5, views = 51, tracking areas = 2,
+all constant while CPU rose from 0.03% to 3.02%).
+
+One unproven observation, deliberately not acted on: an `NSPopover` that has
+been shown once leaves a `_NSPopoverWindow` alive and invisible forever, since
+`popoverDidClose` clears the content controller but not the popover's window.
+Under the storm a control app carrying one leftover popover window measured
+~5.2% against ~4.1% without one. n=3–4 in an environment whose ambient rate
+swings 130–320/s, so it is suggestive at best.
+
+## "Asleep" was answering the wrong question
+
+`Snapshot.age` and `Snapshot.activityAge` are now different things, and the
+distinction is the whole fix:
+
+- **age** — how old the *numbers* are, from the snapshot's own timestamp. It
+  still decides `stale` and every "N ago" the UI prints.
+- **activityAge** — how long since the session last did anything, from the
+  mtime of its transcript. It decides `isLive`, and therefore `asleep`.
+
+They used to be the same number, which made a working session look dead. The
+status line fires on assistant messages, so a session that hands off to a
+subagent emits nothing for as long as the subagent runs. Measured on this
+machine: a session whose snapshot was 3 h 13 m old had been writing to its
+transcript 18 minutes earlier, and another was 3 h 24 m against 50 minutes. The
+avatar called both asleep while they were mid-run.
+
+The collector records `transcript_path`, which Claude Code has been sending as
+a top-level field all along, and the app stats it. Storing the path rather than
+a timestamp is deliberate: the useful reading is the one taken when the app
+looks, not the one taken when the collector last ran — and the collector, by
+definition, is not running during the gap this fixes.
+
+`activityAge` is clamped to `min(age, …)`, so a freshly written snapshot always
+counts as recent activity even if the transcript is somehow behind. A snapshot
+with no `transcript` field, or a path that no longer resolves, falls back to
+`age` — both covered by tests, because both are how this behaves on every
+snapshot written before the field existed.
+
+What this does **not** do is make the numbers fresher. Context and cost cannot
+update while the main loop is blocked on a subagent; no channel carries them.
+A busy session with old numbers now reads `stale` — grey, with an age instead
+of a countdown — which is honest about both halves. Expect the stale greys to
+appear far more often than before; if that starts to bite, the stroked-outline
+treatment noted under "Known legibility limits without a plate" is the fix.
 
 ## Gotchas
 
