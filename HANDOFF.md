@@ -582,9 +582,8 @@ snapshot written before the field existed.
 What this does **not** do is make the numbers fresher. Context and cost cannot
 update while the main loop is blocked on a subagent; no channel carries them.
 A busy session with old numbers now reads `stale` — grey, with an age instead
-of a countdown — which is honest about both halves. Expect the stale greys to
-appear far more often than before; if that starts to bite, the stroked-outline
-treatment noted under "Known legibility limits without a plate" is the fix.
+of a countdown — which is honest about both halves. That makes the grey states
+far more common than before, which is what forced the outline described below.
 
 ## Gotchas
 
@@ -757,14 +756,28 @@ diagnosis. It is kept because it is a genuine safeguard —
 screen still exists, so a real unplug would strand the window — but it is
 guarding a case that has not actually been observed.
 
-## Known legibility limits without a plate
+## Grey states need an outline, not a plate
 
-- The blob creature's calm and no-data states are the dormant grey, which
-  nearly disappears on a pale wallpaper. The drop shadow is all that separates
-  it. Turn the plate on, or pick a style whose resting colour is not grey — the
-  pixel creature rests at brand orange.
-- The pixel creature's asleep and stale states are grey for the same reason and
-  have the same caveat.
+Without the background plate — the default since the plate read as a card with
+a picture in it — a dormant sprite is grey artwork on unknown wallpaper, and on
+a pale desktop the drop shadow was the only thing separating it from nothing.
+
+`asleep` and `stale` now paint a dark halo one point outside every body rect
+before filling it. Because the rects abut, the halo merges into a single
+outline around the silhouette rather than a grid of boxes, and it costs one
+extra fill per rect. `PixelFrame.halo` is nil for every coloured state: orange
+and red separate themselves from any background already, and outlining them
+would just make the character look printed.
+
+This became urgent rather than cosmetic when liveness moved to the transcript.
+A session working through a subagent now sits in `stale` for as long as that
+takes, where previously it passed through `asleep` briefly — so the state that
+was hardest to see became the one shown most.
+
+Still outstanding: the blob creature's `calm` and `no-data` use `dormant`, and
+have the same problem for the same reason. It is not the default style, so it
+has not been done; the fix is the same halo pass.
+
 
 ## What the idle CPU was going on
 

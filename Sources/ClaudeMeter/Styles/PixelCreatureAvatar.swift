@@ -205,7 +205,19 @@ struct PixelCreatureAvatar: View {
         return PixelFrame(pose: pose, marks: marks,
                           fill: Self.bodyFill(p > 0.25 ? state : prev),
                           xOff: xOff, yOff: yOff, blink: blink, critBlink: critBlink,
-                          visor: visor, zRise: zRise, coding: coding)
+                          visor: visor, zRise: zRise,
+                          halo: Self.halo(for: marks), coding: coding)
+    }
+
+    /// The grey states get a dark outline; the coloured ones do not need one.
+    ///
+    /// `noData` is included even though its body is brand orange, because its
+    /// only other mark is a grey "?" that has the same problem.
+    private static func halo(for state: MeterState) -> Color? {
+        switch state {
+        case .asleep, .stale: return Color(nsColor: NSColor(hex: 0x5A5A5E)).opacity(0.55)
+        default:              return nil
+        }
     }
 
     private static func bodyFill(_ state: MeterState) -> Color {
@@ -256,6 +268,21 @@ struct PixelCreatureAvatar: View {
         func rect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat,
                   _ c: Color, opacity: Double = 1) {
             guard w > 0, h > 0 else { return }
+            // Dormant bodies are grey, and grey on a pale wallpaper with no
+            // plate behind it is very nearly nothing — the drop shadow was
+            // doing all the work. A dark halo is painted a third of a unit
+            // outside each rect first, which merges where rects abut and so
+            // reads as one outline around the silhouette rather than a grid of
+            // boxes. Only the grey states need it: the coloured ones already
+            // separate themselves from any background.
+            //
+            // This matters far more since liveness moved to the transcript,
+            // because a session working through a subagent now sits in `stale`
+            // for as long as that takes, where before it was briefly asleep.
+            if let halo = f.halo, c == f.fill {
+                let r = px(x + f.xOff, y + f.yOff, w, h).insetBy(dx: -1, dy: -1)
+                ctx.fill(Path(r), with: .color(halo))
+            }
             ctx.opacity = opacity
             ctx.fill(Path(px(x + f.xOff, y + f.yOff, w, h)), with: .color(c))
             ctx.opacity = 1
@@ -731,6 +758,9 @@ private struct PixelFrame {
     var visor: CGFloat
     /// How far the sleep glyphs have drifted, 0…1 of their travel.
     var zRise: CGFloat
+    /// Outline colour painted behind the body in the grey states, or nil
+    /// when the fill contrasts with a background on its own.
+    var halo: Color?
     /// The coding flourish, when one is playing.
     var coding: CodingFrame?
 }
