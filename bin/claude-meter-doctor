@@ -26,7 +26,7 @@ PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 if [ -t 1 ]; then
   # Mid grey rather than SGR 2 (faint), which dark themes blend into the
   # background until the hint lines are unreadable.
-  GRN=$'\033[32m'; RED=$'\033[31m'; YLW=$'\033[33m'; DIM=$'\033[38;5;245m'; RST=$'\033[0m'
+  GRN=$'\033[32m'; RED=$'\033[31m'; YLW=$'\033[33m'; DIM=$'\033[38;5;250m'; RST=$'\033[0m'
 else
   GRN=""; RED=""; YLW=""; DIM=""; RST=""
 fi
