@@ -611,12 +611,15 @@ far more common than before, which is what forced the outline described below.
   theme it lands close to black. Everything the HUD dimmed — the reset
   countdown, the `1k/1M` token pair, the cost, and both `—` placeholders in a
   session with no readings yet — was unreadable, and a session with no data was
-  the worst case because the whole line was faint. The collector and the doctor
-  both use an explicit light grey (`\033[38;5;250m`) now, which keeps its own
-  value whichever way the theme leans. It was first set to 245, which was still
-  too dim to read comfortably against a dark terminal; 252 is lighter again and
-  245 or 240 darker if it ever needs adjusting. The coloured segments were
-  never affected: green, yellow and red are set as real colours.
+  the worst case because the whole line was faint. Grey at 245 and then 250 was
+  still not comfortable to read at a glance, so the collector's secondary
+  segments are now **bright white** (`\033[97m`), which is a deliberate trade:
+  the line has no visual hierarchy left, and on a light-background terminal
+  white is wrong. `\033[39m` — the terminal's own foreground colour — is the
+  theme-agnostic version if that ever needs fixing. `bin/claude-meter-doctor`
+  stays at grey 250, because a hint line under a failure really is secondary
+  and a whole report at one weight is harder to scan. The coloured segments
+  were never affected: green, yellow and red are set as real colours.
 - **`pkill` does not stop a KeepAlive LaunchAgent.** launchd respawns the app
   within about a second, and the respawn can land between the copy and the
   `codesign` in `build-app.sh` — which then fails against a running binary with

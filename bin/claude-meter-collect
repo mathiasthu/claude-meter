@@ -287,11 +287,14 @@ $(printf '%s' "$snapshot" | "$JQ" -r '
   ] | @tsv' 2>/dev/null)
 EOF
 
-# SGR 2 (faint) is rendered by most terminals as a blend toward the background,
-# which on a dark theme lands somewhere near black -- the muted countdown, token
-# count and cost were unreadable. An explicit mid grey keeps its own value no
-# matter which way the theme leans.
-DIM=$'\033[38;5;250m'; RST=$'\033[0m'
+# The secondary segments -- countdown, token pair, cost, and the "-" shown for a
+# window with no reading yet -- are drawn in bright white. SGR 2 (faint) was
+# unreadable, since terminals implement it as a blend toward the background, and
+# grey was still too dark to read at a glance. This trades away the visual
+# hierarchy: everything on the line now carries the same weight, and on a
+# light-background terminal white is the wrong choice entirely (\033[39m, the
+# terminal's own foreground colour, is the theme-agnostic alternative).
+MUTED=$'\033[97m'; RST=$'\033[0m'
 GRN=$'\033[32m'; YLW=$'\033[33m'; RED=$'\033[31m'
 
 # Percentages arrive as floats (23.5). Bash has no float compare, and the
@@ -301,7 +304,7 @@ int() { local v="${1%%.*}"; case "$v" in ''|*[!0-9-]*) echo "" ;; *) echo "$v" ;
 # Thresholds match the app's mood states: calm / pacing / wind down.
 color_for() {
   local n; n=$(int "$1")
-  [ -n "$n" ] || { printf '%s' "$DIM"; return; }
+  [ -n "$n" ] || { printf '%s' "$MUTED"; return; }
   if   [ "$n" -ge 80 ]; then printf '%s' "$RED"
   elif [ "$n" -ge 50 ]; then printf '%s' "$YLW"
   else                       printf '%s' "$GRN"
@@ -337,9 +340,9 @@ seg=""
 if [ "$f_pct" != "-" ]; then
   left=$(countdown "$f_reset")
   seg="${seg}$(color_for "$f_pct")5h $(int "$f_pct")%${RST}"
-  [ -n "$left" ] && seg="${seg} ${DIM}·${left}${RST}"
+  [ -n "$left" ] && seg="${seg} ${MUTED}·${left}${RST}"
 else
-  seg="${seg}${DIM}5h —${RST}"
+  seg="${seg}${MUTED}5h —${RST}"
 fi
 
 if [ "$s_pct" != "-" ]; then
@@ -349,9 +352,9 @@ fi
 if [ "$c_pct" != "-" ]; then
   seg="${seg}   $(color_for "$c_pct")ctx $(int "$c_pct")%${RST}"
   [ "$c_tok" != "-" ] && [ "$c_size" != "-" ] &&
-    seg="${seg} ${DIM}$(ktok "$c_tok")/$(ktok "$c_size")${RST}"
+    seg="${seg} ${MUTED}$(ktok "$c_tok")/$(ktok "$c_size")${RST}"
 else
-  seg="${seg}   ${DIM}ctx —${RST}"
+  seg="${seg}   ${MUTED}ctx —${RST}"
 fi
 
 if [ "$cost_usd" != "-" ]; then
@@ -359,7 +362,7 @@ if [ "$cost_usd" != "-" ]; then
   # second number when the first one failed, printing "$0.008.34" rather than
   # nothing. A cost that will not parse is dropped instead.
   money=$(printf '%.2f' "$cost_usd" 2>/dev/null) || money=""
-  [ -n "$money" ] && seg="${seg}   ${DIM}\$${money}${RST}"
+  [ -n "$money" ] && seg="${seg}   ${MUTED}\$${money}${RST}"
 fi
 
 printf '%s\n' "$seg"

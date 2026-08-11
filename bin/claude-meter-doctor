@@ -24,11 +24,13 @@ LABEL="com.momentumminds.claude-meter"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 if [ -t 1 ]; then
-  # Mid grey rather than SGR 2 (faint), which dark themes blend into the
-  # background until the hint lines are unreadable.
-  GRN=$'\033[32m'; RED=$'\033[31m'; YLW=$'\033[33m'; DIM=$'\033[38;5;250m'; RST=$'\033[0m'
+  # Light grey rather than SGR 2 (faint), which dark themes blend into the
+  # background until the hint lines are unreadable. This stays grey where the
+  # status line went white: a hint under a failure is genuinely secondary, and
+  # a whole report at one weight is harder to scan than a cramped one-line HUD.
+  GRN=$'\033[32m'; RED=$'\033[31m'; YLW=$'\033[33m'; MUTED=$'\033[38;5;250m'; RST=$'\033[0m'
 else
-  GRN=""; RED=""; YLW=""; DIM=""; RST=""
+  GRN=""; RED=""; YLW=""; MUTED=""; RST=""
 fi
 
 fails=0
@@ -36,7 +38,7 @@ warns=0
 ok()   { printf '  %sok%s    %s\n' "$GRN" "$RST" "$1"; }
 bad()  { printf '  %sfail%s  %s\n' "$RED" "$RST" "$1"; fails=$((fails + 1)); }
 warn() { printf '  %swarn%s  %s\n' "$YLW" "$RST" "$1"; warns=$((warns + 1)); }
-fix()  { printf '        %s%s%s\n' "$DIM" "$1" "$RST"; }
+fix()  { printf '        %s%s%s\n' "$MUTED" "$1" "$RST"; }
 head_() { printf '\n%s\n' "$1"; }
 
 # Whole minutes, then hours, then days -- the same shape the UI uses, because
@@ -52,7 +54,7 @@ ago() {
 }
 
 printf 'claude-meter doctor\n'
-printf '%scheckout: %s%s\n' "$DIM" "$ROOT" "$RST"
+printf '%scheckout: %s%s\n' "$MUTED" "$ROOT" "$RST"
 
 # ------------------------------------------------------------ prerequisites --
 
