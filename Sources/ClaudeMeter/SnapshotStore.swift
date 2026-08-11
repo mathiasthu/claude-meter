@@ -211,6 +211,7 @@ final class SnapshotStore: ObservableObject {
             age: newestAge,
             motionAllowed: settings.motionAllowed,
             showsBackground: settings.showBackground,
+            criticalBlinkSeconds: settings.criticalBlinkSeconds,
             previousState: priorState,
             stateChangedAt: stateChangedAt
         )

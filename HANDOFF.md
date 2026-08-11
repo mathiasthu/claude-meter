@@ -4,7 +4,9 @@
 
 Built 2026-08-07; visual system, click-to-open and the plateless avatar landed
 2026-08-08, followed the same day by the installer rewrite and the animated
-pixel creature; the collector's history trail landed 2026-08-09. Menubar item +
+pixel creature; the collector's history trail landed 2026-08-09. On 2026-08-11
+the critical creature stopped moving — it is red and blinks, and the blink
+period became a setting. Menubar item +
 floating avatar + settings window + status line HUD, all live. `com.momentumminds.claude-meter` LaunchAgent loaded, `RunAtLoad`
 + `KeepAlive`, deployed from `dist/ClaudeMeter.app`.
 
@@ -22,7 +24,7 @@ Verified against real payloads, not synthetic ones:
   elapsed reset, 1M context, empty stdin, malformed stdin, path-unsafe
   session_id). Runs in ~60 ms against a 3 s chain deadline; the one refresh a
   minute that also appends history is ~70 ms.
-- Store, settings and styles: `scripts/selftest.sh`, 46 assertions, all pass.
+- Store, settings and styles: `scripts/selftest.sh`, 57 assertions, all pass.
 - Installer, hooks and the history trail: `scripts/selftest-install.sh`, 44
   assertions, all pass — against a fake `$HOME`, a fake checkout and a stubbed
   clock, so none of it touches this machine.
@@ -203,16 +205,32 @@ Everything is a discrete frame. One `TimelineView` drives the whole sprite,
 `frame(at:)` turns the clock into a `PixelFrame`, and `PixelMotion` — `stepped`,
 `toggle`, `cycle` — is the only arithmetic allowed to touch time. There is no
 `withAnimation` and there must not be: an interpolated sprite stops reading as
-pixel art. `HoppingLayer` is gone; critical shifts sideways instead of jumping,
-which is what the spec asks for and what stops the state reading as cheerful.
+pixel art. `HoppingLayer` is gone.
 
-**The critical shake is ±0.5 unit, not ±1.** §2's text says ±1 and the JSX
-reference says ±0.5; both were rendered at the default 1.75× and compared. One
-unit of total travel is a creature trembling. Two units is 10.5 pt of lateral
-movement every 0.35 s, which reads as the window being dragged rather than as
-panic, and puts the arms on the edge of the ground plate at each extreme. The
-reference wins, which also matches the rest of §2 — the bob and the breath are
-0.4 u, so sub-unit steps are already this sprite's idiom.
+**Critical does not move.** It went hop → ±0.5 u lateral shake → still, and
+still is where it stays. Both moving versions read at the sizes this is actually
+looked at as the avatar being dragged around the screen rather than as panic,
+and the shake put the arms on the edge of the ground plate at each extreme. The
+state now says it with the red body plus a 1.5 s blink, which is all §2's
+colour and geometry cues need; `cycleSteps(.critical)` keeps only the two blink
+steps, so the state costs two wake-ups per 1.5 s instead of five per 1.1 s. The
+blink period is 1.5 rather than the original 1.1 because once the shake was gone
+a blink a second read as twitching; 1.5 is still under focused's 1.7, so
+critical remains the more agitated of the two.
+
+**The blink period is a setting** — `criticalBlinkSeconds`, `avatar.criticalBlinkSeconds`
+in defaults, 0.5…5 s, slider on the Avatar pane. It rides on `AvatarInput`
+rather than being read from `SettingsStore.shared` inside the style, so the
+settings preview follows the slider live and the offscreen renderers stay
+independent of what is saved. Both `cycleSteps` and `frame(at:)` take the same
+number: the schedule says when the view is allowed to redraw, so a period used
+in one and not the other means eyes that shut and never open. The store clamps
+in `didSet` (assigning there re-enters it once, then the clamped value clamps to
+itself and falls through to `save()`), and clamps again on load, because a
+hand-written default of 0 would divide by zero in `truncatingRemainder`.
+Verified by rendering the critical creature over 6 s of real time and counting
+frame changes: 24 at 0.5 s (12 blinks), 4 at 3 s (2 blinks). `PixelFrame`
+lost `xOff` with it — nothing displaces the sprite horizontally any more.
 
 Two things are worth knowing before changing any of it:
 
@@ -247,7 +265,7 @@ The still sheet is the check that matters: `--render-grid` output is
 byte-identical to `docs/avatar-states.png` from before the change, so no state's
 frozen frame moved. Motion itself was verified by rendering the creature
 repeatedly over real time and measuring the sprite — bob and breath 4 px at 3×
-(0.4 u), the critical shake 10 px of travel (1 u), both blinks landing, the drop
+(0.4 u), critical holding a fixed x, both blinks landing, the drop
 falling in five steps, the `z`s rising and fading, and every state collapsing to
 exactly one frame with `motionAllowed: false`.
 
@@ -871,6 +889,10 @@ order, because each one unblocks the next:
   before the window resets" are all a decode away. A Swift reader wants to
   stream the tail rather than parse the whole file, and to skip a line it cannot
   decode rather than give up on the file.
+- `docs/settings-avatar.png` is one row out of date: it predates the Critical
+  blink slider on the Avatar pane. Regenerating it needs a real screenshot —
+  `ImageRenderer` draws `Slider` as a placeholder block, so `--render-ui` cannot
+  do it. `--open-settings --settings-pane avatar` and a window capture will.
 - Decide whether the pixel creature sits too high in its ground. Content spans
   y 6–31.5 in a 48 pt box, so there is 6 pt above and 16.5 pt below. It is
   faithful to the spec's coordinates, which is why it was left alone; shifting
@@ -892,7 +914,7 @@ order, because each one unblocks the next:
 ```bash
 ./install.sh                 # build + wire + load. idempotent.
 ./scripts/build-app.sh       # rebuild the bundle only
-./scripts/selftest.sh        # 46 headless assertions: store, settings, styles
+./scripts/selftest.sh        # 57 headless assertions: store, settings, styles
 ./scripts/selftest-install.sh # 55 assertions: installer, hooks, collector, doctor
 bin/claude-meter-doctor      # why is the menubar empty. read-only.
 launchctl kickstart -k gui/$UID/com.momentumminds.claude-meter   # restart the app

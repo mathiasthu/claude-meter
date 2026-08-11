@@ -30,6 +30,25 @@ final class SettingsStore: ObservableObject {
     /// size it reads as a card with a picture in it rather than as the
     /// character. With it off the art gets a drop shadow instead.
     @Published var showBackground: Bool = false             { didSet { save() } }
+    /// Seconds between blinks while critical. Critical no longer moves, so the
+    /// blink is the whole of its motion and how insistent the state feels is
+    /// entirely this number — which is exactly the kind of thing one person
+    /// wants at 0.8 and another at 3. Clamped to the slider's own range on the
+    /// way in and out, so a hand-edited default cannot produce a seizure or a
+    /// creature that never blinks at all.
+    @Published var criticalBlinkSeconds: Double = 1.5 {
+        didSet {
+            let c = min(max(criticalBlinkSeconds, Self.blinkRange.lowerBound),
+                        Self.blinkRange.upperBound)
+            // Assigning inside didSet re-enters it; the guard is that the
+            // clamped value clamps to itself, so the second pass falls through
+            // to save() and stops.
+            if c != criticalBlinkSeconds { criticalBlinkSeconds = c; return }
+            save()
+        }
+    }
+
+    static let blinkRange: ClosedRange<Double> = 0.5...5
 
     // MARK: State source
 
@@ -75,6 +94,7 @@ final class SettingsStore: ObservableObject {
         static let ignoreMouse = "avatar.ignoreMouse"
         static let fullScreen = "avatar.floatOverFullScreen"
         static let background = "avatar.showBackground"
+        static let critBlink = "avatar.criticalBlinkSeconds"
         static let source = "state.source"
         static let thresholds = "state.thresholds"
         static let mbMetric = "menubar.metric"
@@ -100,6 +120,10 @@ final class SettingsStore: ObservableObject {
         if let v = defaults.object(forKey: K.ignoreMouse) as? Bool { ignoreMouse = v }
         if let v = defaults.object(forKey: K.fullScreen) as? Bool { floatOverFullScreen = v }
         if let v = defaults.object(forKey: K.background) as? Bool { showBackground = v }
+        if let v = defaults.object(forKey: K.critBlink) as? Double {
+            criticalBlinkSeconds = min(max(v, Self.blinkRange.lowerBound),
+                                       Self.blinkRange.upperBound)
+        }
         if let s = defaults.string(forKey: K.source), let v = StateSource(rawValue: s) {
             stateSource = v
         }
@@ -129,6 +153,7 @@ final class SettingsStore: ObservableObject {
         defaults.set(ignoreMouse, forKey: K.ignoreMouse)
         defaults.set(floatOverFullScreen, forKey: K.fullScreen)
         defaults.set(showBackground, forKey: K.background)
+        defaults.set(criticalBlinkSeconds, forKey: K.critBlink)
         defaults.set(stateSource.rawValue, forKey: K.source)
         if let data = try? JSONEncoder().encode(thresholds) {
             defaults.set(data, forKey: K.thresholds)
@@ -149,6 +174,7 @@ final class SettingsStore: ObservableObject {
         ignoreMouse = false
         floatOverFullScreen = true
         showBackground = false
+        criticalBlinkSeconds = 1.5
         stateSource = .worst
         thresholds = .default
         menubarMetric = .fiveHour

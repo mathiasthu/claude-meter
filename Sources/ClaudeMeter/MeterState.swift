@@ -82,6 +82,11 @@ struct AvatarInput {
     /// than as the character itself. With it off the styles get a drop shadow
     /// instead, which is what keeps them legible over pale wallpaper.
     var showsBackground: Bool = false
+    /// Seconds between blinks in the critical state, from settings. Carried on
+    /// the input rather than read from `SettingsStore.shared` inside the style,
+    /// so the settings preview reflects the slider as it moves and the
+    /// offscreen renderers stay independent of whatever the user has saved.
+    var criticalBlinkSeconds: Double = 1.5
     /// The state this one replaced, and the moment it did, on
     /// `timeIntervalSinceReferenceDate`.
     ///

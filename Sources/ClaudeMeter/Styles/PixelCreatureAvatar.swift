@@ -7,8 +7,8 @@ import SwiftUI
 /// like it belongs to the terminal it is watching. Body is brand orange at
 /// rest — only escalation re-tints it, so orange means "fine".
 ///
-/// It is the one style that moves in every state rather than only in critical,
-/// and nothing in it eases. A `TimelineView` hands each draw the clock,
+/// It is the one style that moves in most states rather than only in critical —
+/// critical itself is deliberately still — and nothing in it eases. A `TimelineView` hands each draw the clock,
 /// `PixelMotion` quantises that into whole frames, and the canvas paints what
 /// it is told — there is no `withAnimation` here and there must not be one,
 /// because an interpolated sprite stops looking drawn.
@@ -59,7 +59,7 @@ struct PixelCreatureAvatar: View {
         // Cycles keyed to a state change count from it; without that history
         // they free-run off the wall clock, which is an origin of zero.
         let cue = input.stateChangedAt ?? 0
-        var steps = Self.cycleSteps(input.state, cue: cue)
+        var steps = Self.cycleSteps(input.state, cue: cue, blink: blinkPeriod)
         // A run only ever plays over calm or focused, so only those two carry
         // its wake-ups. The list covers the run playing now and the next one,
         // and is empty in between — the schedule that idles is the same one it
@@ -71,7 +71,7 @@ struct PixelCreatureAvatar: View {
             return PixelStepSchedule(steps: steps, instants: instants)
         }
         let prev = input.previousState ?? input.state
-        steps += Self.cycleSteps(prev, cue: cue)
+        steps += Self.cycleSteps(prev, cue: cue, blink: blinkPeriod)
         // The pose morph, and the sunglasses when one end of the change is calm.
         // Both stop mattering the moment they finish, so they expire.
         steps.append(PixelStep(origin: changed, period: 0.125, phase: 0.0625,
@@ -83,10 +83,23 @@ struct PixelCreatureAvatar: View {
         return PixelStepSchedule(steps: steps, instants: instants)
     }
 
+    /// How long the critical eyes stay shut. Fixed rather than a fraction of
+    /// the period: a blink is a blink at any rate, and scaling it would make
+    /// the slow end read as a creature dozing off.
+    private static let critBlinkShut: Double = 0.16
+
+    /// The user's critical blink period, clamped to the same range the settings
+    /// slider offers. A style asked to draw a period of zero would divide by it.
+    private var blinkPeriod: Double {
+        min(max(input.criticalBlinkSeconds, SettingsStore.blinkRange.lowerBound),
+            SettingsStore.blinkRange.upperBound)
+    }
+
     /// When each state's continuous cycles change value. These mirror the
     /// arithmetic in `frame(at:)` exactly — a step function sampled anywhere
     /// other than its own steps either stutters or wastes the wake-up.
-    private static func cycleSteps(_ state: MeterState, cue: Double) -> [PixelStep] {
+    private static func cycleSteps(_ state: MeterState, cue: Double,
+                                   blink: Double) -> [PixelStep] {
         switch state {
         case .calm:
             return [PixelStep(origin: 0, period: 0.9)]              // idle bob
@@ -95,9 +108,13 @@ struct PixelCreatureAvatar: View {
                     PixelStep(origin: cue, period: 1.7),            // blink shut
                     PixelStep(origin: cue, period: 1.7, phase: 0.14)]  // and open
         case .critical:
-            return [PixelStep(origin: cue, period: 0.35),           // shake
-                    PixelStep(origin: cue, period: 1.1),            // blink shut
-                    PixelStep(origin: cue, period: 1.1, phase: 0.16)]
+            // Blink only. The lateral tremble that used to run at 0.35 was read
+            // as the window being dragged rather than as alarm, so critical now
+            // holds still and says it in red. The period is the user's, so the
+            // schedule has to be built from the same number `frame(at:)` uses
+            // or the eyes would open on a wake-up that never comes.
+            return [PixelStep(origin: cue, period: blink),          // blink shut
+                    PixelStep(origin: cue, period: blink, phase: critBlinkShut)]
         case .asleep:
             // Breath, plus six steps of drift and the glyphs' return.
             return [PixelStep(origin: cue, period: 1.2),
@@ -155,7 +172,7 @@ struct PixelCreatureAvatar: View {
             coding = PixelCoding.frame(at: e)
         }
 
-        var yOff: CGFloat = 0, xOff: CGFloat = 0
+        var yOff: CGFloat = 0
         var blink = false, critBlink = false
         var zRise: CGFloat = 0
         if live {
@@ -166,14 +183,10 @@ struct PixelCreatureAvatar: View {
                 if coding?.bobs ?? true {
                     yOff = PixelMotion.toggle(now, period: 0.9, amount: 0.4)
                 }
-            case .critical:
-                // A shift, not a hop: the old jump read as pleased with itself,
-                // and panic is lateral. Half a unit either side — one unit of
-                // travel, as the reference authored it. Trying the spec text's
-                // literal ±1 at the default 1.75× read as the window being
-                // dragged rather than as a creature trembling, and put the arms
-                // on the edge of the plate at the extremes.
-                xOff = PixelMotion.toggle(cue, period: 0.35, amount: 1) - 0.5
+            // Critical does not move at all: the red body and the blink carry
+            // it. Both the earlier hop and the lateral tremble that replaced it
+            // read as the avatar being dragged around the screen, which is
+            // worse than no motion at the size this is actually looked at.
             case .asleep:
                 pose.bh += PixelMotion.toggle(cue, period: 1.2, amount: 0.4)
             default:
@@ -182,8 +195,12 @@ struct PixelCreatureAvatar: View {
             // Squinting at a screen outranks blinking at nothing.
             blink = marks == .focused && !(coding?.typing ?? false) && cue > 0.8
                 && cue.truncatingRemainder(dividingBy: 1.7) < 0.14
+            // The period is the user's — 1.5 by default, which is slower than
+            // the 1.1 this shipped with and still quicker than focused's 1.7,
+            // so critical stays the more agitated of the two blinks without the
+            // twitchiness of one a second.
             critBlink = marks == .critical && cue > 0.6
-                && cue.truncatingRemainder(dividingBy: 1.1) < 0.16
+                && cue.truncatingRemainder(dividingBy: blinkPeriod) < Self.critBlinkShut
             if marks == .asleep && cue > 0.4 {
                 zRise = PixelMotion.cycle(cue, period: 2, steps: 6)
             }
@@ -204,7 +221,7 @@ struct PixelCreatureAvatar: View {
 
         return PixelFrame(pose: pose, marks: marks,
                           fill: Self.bodyFill(p > 0.25 ? state : prev),
-                          xOff: xOff, yOff: yOff, blink: blink, critBlink: critBlink,
+                          yOff: yOff, blink: blink, critBlink: critBlink,
                           visor: visor, zRise: zRise,
                           halo: Self.halo(for: marks), coding: coding)
     }
@@ -261,8 +278,8 @@ struct PixelCreatureAvatar: View {
     }
 
     /// The creature itself, without the ground or the corner marks. Everything
-    /// in here rides the frame's offset, which is what makes the bob and the
-    /// critical shake move the whole character in one piece.
+    /// in here rides the frame's offset, which is what makes the idle bob move
+    /// the whole character in one piece.
     private func drawCreature(_ ctx: inout GraphicsContext, _ f: PixelFrame) {
         let ink = Self.featureInk
         func rect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat,
@@ -280,11 +297,11 @@ struct PixelCreatureAvatar: View {
             // because a session working through a subagent now sits in `stale`
             // for as long as that takes, where before it was briefly asleep.
             if let halo = f.halo, c == f.fill {
-                let r = px(x + f.xOff, y + f.yOff, w, h).insetBy(dx: -1, dy: -1)
+                let r = px(x, y + f.yOff, w, h).insetBy(dx: -1, dy: -1)
                 ctx.fill(Path(r), with: .color(halo))
             }
             ctx.opacity = opacity
-            ctx.fill(Path(px(x + f.xOff, y + f.yOff, w, h)), with: .color(c))
+            ctx.fill(Path(px(x, y + f.yOff, w, h)), with: .color(c))
             ctx.opacity = 1
         }
 
@@ -330,7 +347,7 @@ struct PixelCreatureAvatar: View {
         case .stale:
             // Hollow eyes: the lights are on but nothing is reporting.
             for x in [pose.eyeX1, pose.eyeX2] {
-                ctx.stroke(Path(px(x + f.xOff, pose.eyeY + f.yOff, pose.eyeW, pose.eyeW)),
+                ctx.stroke(Path(px(x, pose.eyeY + f.yOff, pose.eyeW, pose.eyeW)),
                            with: .color(ink), lineWidth: 1)
             }
 
@@ -749,8 +766,7 @@ private struct PixelFrame {
     /// becomes the incoming state once the morph is more than half done.
     var marks: MeterState
     var fill: Color
-    /// Whole-frame displacement of the entire creature, in grid units.
-    var xOff: CGFloat
+    /// Whole-frame vertical displacement of the entire creature, in grid units.
     var yOff: CGFloat
     var blink: Bool
     var critBlink: Bool

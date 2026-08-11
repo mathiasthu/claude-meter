@@ -310,7 +310,8 @@ struct PreviewStrip: View {
             context: max(0, pct * 0.8),
             sessions: [pct],
             age: 12,
-            motionAllowed: settings.motionAllowed)
+            motionAllowed: settings.motionAllowed,
+            criticalBlinkSeconds: settings.criticalBlinkSeconds)
 
         switch ui.forced {
         case .none:   break
@@ -374,6 +375,17 @@ struct AvatarPane: View {
                     HStack {
                         Slider(value: $settings.opacity, in: 0.3...1.0).frame(width: 130)
                         Text("\(Int(settings.opacity * 100))%")
+                            .font(Typo.mono(11)).foregroundStyle(.secondary)
+                            .frame(width: 42, alignment: .trailing)
+                    }
+                }
+                Divider()
+                SettingRow("Critical blink",
+                           note: "How often the pixel creature blinks once it is critical. Critical is otherwise still.") {
+                    HStack {
+                        Slider(value: $settings.criticalBlinkSeconds,
+                               in: SettingsStore.blinkRange, step: 0.1).frame(width: 130)
+                        Text(String(format: "%.1f s", settings.criticalBlinkSeconds))
                             .font(Typo.mono(11)).foregroundStyle(.secondary)
                             .frame(width: 42, alignment: .trailing)
                     }

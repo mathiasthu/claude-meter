@@ -224,17 +224,32 @@ MainActor.assumeIsolated {
           s1.thresholds == Thresholds.default, "\(s1.thresholds)")
     check("default scale is 1.75", s1.scale == 1.75, "\(s1.scale)")
     check("background plate off by default", s1.showBackground == false, "\(s1.showBackground)")
+    check("default critical blink is 1.5s", s1.criticalBlinkSeconds == 1.5,
+          "\(s1.criticalBlinkSeconds)")
 
     // --- settings: persistence round-trip ---
     s1.styleID = .pill
     s1.scale = 1.4
     s1.menubarMetric = .sevenDay
     s1.thresholds.set(.critical, to: 90)
+    s1.criticalBlinkSeconds = 2.4
     let s2 = SettingsStore(defaults: UserDefaults(suiteName: suite)!)
     check("style persists", s2.styleID == .pill, "\(s2.styleID)")
     check("scale persists", s2.scale == 1.4, "\(s2.scale)")
     check("menubar metric persists", s2.menubarMetric == .sevenDay, "\(s2.menubarMetric)")
     check("thresholds persist", s2.thresholds.critical == 90, "\(s2.thresholds.critical)")
+    check("critical blink persists", s2.criticalBlinkSeconds == 2.4,
+          "\(s2.criticalBlinkSeconds)")
+
+    // --- settings: critical blink clamps to the slider's range ---
+    s1.criticalBlinkSeconds = 12
+    check("critical blink clamps high",
+          s1.criticalBlinkSeconds == SettingsStore.blinkRange.upperBound,
+          "\(s1.criticalBlinkSeconds)")
+    s1.criticalBlinkSeconds = 0
+    check("critical blink clamps low",
+          s1.criticalBlinkSeconds == SettingsStore.blinkRange.lowerBound,
+          "\(s1.criticalBlinkSeconds)")
 
     // --- settings: thresholds stay ordered ---
     var t = Thresholds.default
@@ -255,6 +270,8 @@ MainActor.assumeIsolated {
     s1.resetToDefaults()
     check("reset restores style", s1.styleID == .pixelCreature, "\(s1.styleID)")
     check("reset restores thresholds", s1.thresholds == Thresholds.default, "\(s1.thresholds)")
+    check("reset restores critical blink", s1.criticalBlinkSeconds == 1.5,
+          "\(s1.criticalBlinkSeconds)")
     d1.removePersistentDomain(forName: suite)
 
     // --- every style renders every state without trapping ---

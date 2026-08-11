@@ -178,9 +178,11 @@ Thresholds are editable. Critical is never colour alone — each style adds a
 geometric cue (badge, warning triangle, wide white eyes, ring), so escalation
 survives colour-vision deficiency and greyscale.
 
-The pixel creature moves in every state rather than only in critical: it bobs,
-blinks, takes its sunglasses off on the way from calm to focused, shakes when
-critical, breathes while asleep, and steps between poses in whole pixels. Every
+The pixel creature moves in most states rather than only in critical: it bobs,
+blinks, takes its sunglasses off on the way from calm to focused, breathes while
+asleep, and steps between poses in whole pixels. Critical is the exception — it
+holds still, goes red and blinks, because motion there read as the avatar being
+dragged around the screen. Every
 minute or two while calm or focused it also pulls out a laptop and types for a
 few seconds. Animation respects the system Reduce Motion setting — with it on,
 every cycle freezes at its rest frame, state changes are instant, and the
@@ -221,6 +223,11 @@ stale, no data, empty, many sessions.
 Thresholds re-order themselves rather than refusing an edit — raising Focused
 past Strained pushes Strained up — and the preview strip re-colours its track to
 the edited boundaries immediately.
+
+**Critical blink** on the Avatar pane sets how often the pixel creature blinks
+once it is critical, from 0.5 s to 5 s (default 1.5 s). Critical is otherwise
+still, so this is the whole of its motion — push the sweep slider past the
+Critical threshold and the preview blinks at the rate you are choosing.
 
 ### Reviewing it without clicking
 
