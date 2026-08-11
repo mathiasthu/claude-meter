@@ -287,7 +287,11 @@ $(printf '%s' "$snapshot" | "$JQ" -r '
   ] | @tsv' 2>/dev/null)
 EOF
 
-DIM=$'\033[2m'; RST=$'\033[0m'
+# SGR 2 (faint) is rendered by most terminals as a blend toward the background,
+# which on a dark theme lands somewhere near black -- the muted countdown, token
+# count and cost were unreadable. An explicit mid grey keeps its own value no
+# matter which way the theme leans.
+DIM=$'\033[38;5;245m'; RST=$'\033[0m'
 GRN=$'\033[32m'; YLW=$'\033[33m'; RED=$'\033[31m'
 
 # Percentages arrive as floats (23.5). Bash has no float compare, and the

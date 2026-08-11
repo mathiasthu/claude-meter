@@ -6,7 +6,8 @@ Built 2026-08-07; visual system, click-to-open and the plateless avatar landed
 2026-08-08, followed the same day by the installer rewrite and the animated
 pixel creature; the collector's history trail landed 2026-08-09. On 2026-08-11
 the critical creature stopped moving — it is red and blinks, and the blink
-period became a setting. Menubar item +
+period became a setting — and the status line's muted text stopped being
+unreadable. Menubar item +
 floating avatar + settings window + status line HUD, all live. `com.momentumminds.claude-meter` LaunchAgent loaded, `RunAtLoad`
 + `KeepAlive`, deployed from `dist/ClaudeMeter.app`.
 
@@ -605,6 +606,16 @@ far more common than before, which is what forced the outline described below.
 
 ## Gotchas
 
+- **Never use SGR 2 (faint) for status line text.** Terminals implement faint
+  as a blend toward the background rather than as a fixed grey, so on a dark
+  theme it lands close to black. Everything the HUD dimmed — the reset
+  countdown, the `1k/1M` token pair, the cost, and both `—` placeholders in a
+  session with no readings yet — was unreadable, and a session with no data was
+  the worst case because the whole line was faint. The collector and the doctor
+  both use an explicit mid grey (`\033[38;5;245m`) now, which keeps its own
+  value whichever way the theme leans. 250 is lighter and 240 darker if the
+  default turns out wrong for a particular theme. The coloured segments were
+  never affected: green, yellow and red are set as real colours.
 - **`pkill` does not stop a KeepAlive LaunchAgent.** launchd respawns the app
   within about a second, and the respawn can land between the copy and the
   `codesign` in `build-app.sh` — which then fails against a running binary with
