@@ -98,6 +98,15 @@ struct AvatarInput {
     /// offscreen renderers need to capture a settled frame.
     var previousState: MeterState?
     var stateChangedAt: TimeInterval?
+    /// When the avatar was last clicked, on `timeIntervalSinceReferenceDate`.
+    ///
+    /// A click already opens the breakdown; this is the sprite acknowledging
+    /// that it was the thing you hit. Carried on the input for the same reason
+    /// `stateChangedAt` is: the styles are structs rebuilt on every update and
+    /// cannot remember anything themselves. Nil everywhere except the floating
+    /// panel — the settings preview and the offscreen renderers have no clicks
+    /// to report and must keep drawing settled frames.
+    var clickedAt: TimeInterval?
 
     /// Three or more concurrent sessions switches styles to their multi
     /// variant. Two is common enough to be unremarkable.

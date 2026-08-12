@@ -7,7 +7,8 @@ Built 2026-08-07; visual system, click-to-open and the plateless avatar landed
 pixel creature; the collector's history trail landed 2026-08-09. On 2026-08-11
 the critical creature stopped moving — it is red and blinks, and the blink
 period became a setting — and the status line's muted text stopped being
-unreadable. Menubar item +
+unreadable. On 2026-08-12 the avatar's popover stopped opening 60 pt clear of
+the sprite, and clicking the pixel creature makes it hop. Menubar item +
 floating avatar + settings window + status line HUD, all live. `com.momentumminds.claude-meter` LaunchAgent loaded, `RunAtLoad`
 + `KeepAlive`, deployed from `dist/ClaudeMeter.app`.
 
@@ -25,8 +26,8 @@ Verified against real payloads, not synthetic ones:
   elapsed reset, 1M context, empty stdin, malformed stdin, path-unsafe
   session_id). Runs in ~60 ms against a 3 s chain deadline; the one refresh a
   minute that also appends history is ~70 ms.
-- Store, settings and styles: `scripts/selftest.sh`, 57 assertions, all pass.
-- Installer, hooks and the history trail: `scripts/selftest-install.sh`, 44
+- Store, settings and styles: `scripts/selftest.sh`, 60 assertions, all pass.
+- Installer, hooks and the history trail: `scripts/selftest-install.sh`, 55
   assertions, all pass — against a fake `$HOME`, a fake checkout and a stubbed
   clock, so none of it touches this machine.
 - Decode: real snapshots from two concurrent sessions decode with correct
@@ -43,7 +44,8 @@ Verified against real payloads, not synthetic ones:
   permission this machine does not grant, so there is no automated test —
   dragging has since been driven by hand and traced (see below), but clicking
   has not. `AvatarUIState.clickSlop` (3 pt) is the one knob if it ever
-  mis-fires.
+  mis-fires. What a click *produces* is covered: the hop is asserted from
+  rendered pixels in `selftest.sh`, with `clickedAt` set directly.
 - Anything about how the app behaves over time — the panel surviving a display
   change, the popover under a Space switch, the LaunchAgent after a reboot.
 
@@ -249,6 +251,29 @@ Two things are worth knowing before changing any of it:
   other's idea of "previous". Both fields nil means "no history, draw the state
   outright", which is exactly what the preview wants while its slider sweeps
   and what `--render-grid` needs to capture a settled frame.
+
+**A click makes it hop.** From `Pixel Creature Coding.dc.html` in the design
+project, where clicking the sprite runs a four-frame jump. Four whole frames of
+0.15 s — −0.9, −1.5, −0.6, 0 grid units — plus eyes squeezed to 0.45 u while it
+is in the air, which is what makes the jump read as pleased rather than
+startled. The reference writes the travel as CSS pixels against a 480 px render
+of the 48 u grid, so it is a tenth of the number it looks like; taken as units
+the creature would leave the canvas.
+
+The click reaches the sprite the same way state history does — on
+`AvatarInput`, as `clickedAt`. `AvatarUIState` is what publishes it, because
+the gesture already lives there and the panel owns that object across
+re-renders; `AvatarHost` merges it into the store's input on the way past. So
+it is set only on the floating panel: the settings preview and the offscreen
+renderers pass nil and keep drawing settled frames. The hop's wake-ups expire
+with it (`PixelStep(until:)`), so an avatar nobody has clicked carries none.
+Only the pixel creature reacts — the other three styles ignore the field.
+
+Reduce motion suppresses it, like everything else here. It runs in the still
+states including critical: holding still there is about not miming alarm, not
+about ignoring the user. `empty` is the exception, having no creature to jump.
+Covered by three assertions in `selftest.sh` that measure the top of the ink in
+a rendered frame — lifted mid-hop, back down after, unmoved with motion off.
 
 Deliberate deviations, from following the animated reference over the prose:
 
@@ -680,6 +705,13 @@ far more common than before, which is what forced the outline described below.
   `.frame(naturalSize)` it silently clips any style that grows. `ScaledLayout`
   measures the subview and claims `intrinsic × scale`; keep new styles going
   through `ScaledAvatar` rather than framing them by hand.
+- **An `NSPopover` is positioned from `contentSize`, which defaults to
+  320×320.** SwiftUI content sizes itself later, so a popover shown without
+  that field set is placed as if it were 320 pt square whatever it draws — the
+  balloon then floats inside an oversized window with tens of points of slack
+  around it. Set `contentSize` from the hosting controller's `fittingSize`
+  after forcing a layout, which is what `install(sessionListInto:)` does for
+  both popovers here.
 - **Launch-at-login is deliberately inert when the LaunchAgent exists.**
   install.sh already starts the app at login; also registering `SMAppService`
   would double-launch it. The Behaviour pane detects the plist and shows the
@@ -743,6 +775,28 @@ Verified with `--open-avatar-popover`, which opens it at launch without
 promoting the activation policy, so it exercises the real `.accessory` path.
 Clicking still has no automated coverage; synthetic clicks need Accessibility
 permission this machine does not grant.
+
+### The popover opened 60 pt clear of the avatar
+
+Two independent causes, both fixed in `MenubarController`/`AvatarPanel`:
+
+- **The popover was the wrong size when it was placed.** Neither popover set
+  `contentSize`, so AppKit positioned a window still carrying the 320×320
+  default while SwiftUI drew a 296 pt balloon inside it. `install(sessionListInto:)`
+  now builds the hosting controller, forces a layout, and hands the fitting
+  size over before `show(relativeTo:)`. Both popovers go through it. Measured:
+  the window went from 346×346 to 322×293 for a 296×267 balloon.
+- **The window is not the sprite.** Every style paints inside a canvas larger
+  than its silhouette — the pixel creature's body starts 9 u down a 48 u grid —
+  and with the plate off that margin is transparent, so anchoring to the
+  content view aimed the arrow at empty air. `AvatarPanel.spriteBounds()`
+  renders the hosting view into a bitmap, walks the alpha for a bounding box
+  (ignoring anything under alpha 48, which is the drop shadow), and returns it
+  in points; `toggleAvatarPopover()` anchors to that. Measuring beats
+  per-style insets because the silhouette changes with style, scale and state.
+
+Verified by logging both frames and photographing the result: the popover
+window's bottom edge now sits exactly on the sprite's top edge.
 
 ### Never position the panel by accumulating deltas
 
@@ -911,7 +965,9 @@ order, because each one unblocks the next:
 - Decide whether the pixel creature sits too high in its ground. Content spans
   y 6–31.5 in a 48 pt box, so there is 6 pt above and 16.5 pt below. It is
   faithful to the spec's coordinates, which is why it was left alone; shifting
-  it down ~5 pt would centre it.
+  it down ~5 pt would centre it. `AvatarPanel.spriteBounds()` now measures the
+  real box at runtime, so this can be checked against a live frame rather than
+  against the coordinates in the source.
 - Calm and focused are hard to tell apart on the pixel creature at 1× — the
   sunglasses bar and the two eye squares occupy nearly the same footprint. It
   reads correctly when enlarged. Worth a wider or differently-shaped visor if
@@ -929,7 +985,7 @@ order, because each one unblocks the next:
 ```bash
 ./install.sh                 # build + wire + load. idempotent.
 ./scripts/build-app.sh       # rebuild the bundle only
-./scripts/selftest.sh        # 57 headless assertions: store, settings, styles
+./scripts/selftest.sh        # 60 headless assertions: store, settings, styles
 ./scripts/selftest-install.sh # 55 assertions: installer, hooks, collector, doctor
 bin/claude-meter-doctor      # why is the menubar empty. read-only.
 launchctl kickstart -k gui/$UID/com.momentumminds.claude-meter   # restart the app

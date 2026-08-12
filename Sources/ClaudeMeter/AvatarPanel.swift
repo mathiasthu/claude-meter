@@ -163,6 +163,57 @@ final class AvatarPanel: NSPanel {
         repaintContents()
     }
 
+    /// The box the artwork actually paints into, in the content view's
+    /// coordinates, or the whole content view when nothing can be measured.
+    ///
+    /// Every style draws inside a canvas larger than its silhouette — the pixel
+    /// creature's body starts 9 pt down a 48 pt grid, and both creatures leave
+    /// room at the sides for poses that reach. With the plate off that padding
+    /// is transparent, so a popover anchored to the window edge opens a
+    /// visible gap above the sprite: at 1.75× the empty band alone is ~30 pt,
+    /// and the popover's own shadow margin doubles it.
+    ///
+    /// Measuring the pixels rather than hard-coding per-style insets keeps this
+    /// honest across styles, scales, and the states that change the silhouette
+    /// (the pill's text, the creature's raised sunglasses).
+    func spriteBounds() -> NSRect {
+        let full = host.bounds
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: full) else { return full }
+        host.cacheDisplay(in: full, to: rep)
+        guard let data = rep.bitmapData, rep.bitsPerSample == 8,
+              rep.samplesPerPixel == 4, rep.pixelsWide > 0, rep.pixelsHigh > 0
+        else { return full }
+
+        // Ignore the near-transparent fringe: the artwork carries a drop shadow
+        // that spreads a couple of points past the silhouette, and anchoring to
+        // the shadow would put the gap back.
+        let cutoff = 48
+        var minX = rep.pixelsWide, maxX = -1, minY = rep.pixelsHigh, maxY = -1
+        let alphaFirst = rep.bitmapFormat.contains(.alphaFirst)
+        for y in 0..<rep.pixelsHigh {
+            let row = data + y * rep.bytesPerRow
+            for x in 0..<rep.pixelsWide {
+                let px = row + x * 4
+                let alpha = Int(px[alphaFirst ? 0 : 3])
+                guard alpha > cutoff else { continue }
+                if x < minX { minX = x }
+                if x > maxX { maxX = x }
+                if y < minY { minY = y }
+                if y > maxY { maxY = y }
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return full }
+
+        // The bitmap is in device pixels; the caller wants points. Rows run
+        // top-down, which is also how the hosting view's flipped coordinates
+        // run, so only the scale has to be undone.
+        let sx = full.width / CGFloat(rep.pixelsWide)
+        let sy = full.height / CGFloat(rep.pixelsHigh)
+        return NSRect(x: CGFloat(minX) * sx, y: CGFloat(minY) * sy,
+                      width: CGFloat(maxX - minX + 1) * sx,
+                      height: CGFloat(maxY - minY + 1) * sy)
+    }
+
     /// Repaints the whole content area after a resize.
     ///
     /// The window is borderless with a clear background and `isOpaque` off, so

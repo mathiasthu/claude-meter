@@ -160,12 +160,19 @@ final class MenubarController: NSObject, NSPopoverDelegate {
         }
     }
 
-    private func togglePopover(_ sender: NSStatusBarButton) {
-        if popover.isShown {
-            popover.performClose(nil)
-            return
-        }
-        popover.contentViewController = NSHostingController(
+    /// Builds the breakdown both popovers show, and tells the popover how big
+    /// it is going to be.
+    ///
+    /// The size is not decoration. Without it the popover keeps its 320×320
+    /// default until SwiftUI has laid the list out, and AppKit positions the
+    /// popover from that stale number: the balloon it actually drew was 296 pt
+    /// wide and however tall the sessions made it, floating inside a window
+    /// sized for something else, which put ~40 pt of empty air between the
+    /// arrow and whatever the popover was anchored to. Laying the hosting view
+    /// out here and handing over its fitting size makes the window the size of
+    /// the balloon, so the arrow lands where it was aimed.
+    private func install(sessionListInto popover: NSPopover) {
+        let controller = NSHostingController(
             rootView: SessionListView(
                 store: store,
                 settings: settings,
@@ -174,6 +181,18 @@ final class MenubarController: NSObject, NSPopoverDelegate {
                 onQuit: { NSApp.terminate(nil) }
             )
         )
+        popover.contentViewController = controller
+        controller.view.layoutSubtreeIfNeeded()
+        let fitted = controller.view.fittingSize
+        if fitted.width > 1, fitted.height > 1 { popover.contentSize = fitted }
+    }
+
+    private func togglePopover(_ sender: NSStatusBarButton) {
+        if popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+        install(sessionListInto: popover)
         store.reload()
         store.beginFineUpdates()
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
@@ -264,21 +283,17 @@ final class MenubarController: NSObject, NSPopoverDelegate {
             avatarPopover.performClose(nil)
             return
         }
-        avatarPopover.contentViewController = NSHostingController(
-            rootView: SessionListView(
-                store: store,
-                settings: settings,
-                onToggleAvatar: { [weak self] in self?.toggleAvatar() },
-                onOpenSettings: { [weak self] in self?.openSettings() },
-                onQuit: { NSApp.terminate(nil) }
-            )
-        )
+        install(sessionListInto: avatarPopover)
         store.reload()
         store.beginFineUpdates()
         NSApp.activate(ignoringOtherApps: true)
+        // Anchored to the painted sprite rather than to the window: the styles
+        // leave transparent margin inside their canvas, and anchoring to the
+        // window edge left the popover floating well clear of the artwork.
         // The hosting view is flipped, so .minY is the visual bottom edge.
         // AppKit flips it automatically when the avatar is parked low.
-        avatarPopover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+        avatarPopover.show(relativeTo: avatar?.spriteBounds() ?? anchor.bounds,
+                           of: anchor, preferredEdge: .minY)
         avatarPopover.contentViewController?.view.window?.makeKey()
     }
 

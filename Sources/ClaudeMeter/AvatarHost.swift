@@ -24,6 +24,12 @@ final class AvatarUIState: ObservableObject {
     var lastMouse: NSPoint?
     var dragDistance: CGFloat = 0
 
+    /// When the last click landed, for the styles that react to being poked.
+    /// Published because the reaction has to reach the sprite: nothing else in
+    /// this class changes what is on screen, so it is the only field that
+    /// needs to push an update.
+    @Published var clickedAt: TimeInterval?
+
     /// Below this a press counts as a click, not a drag. Small enough that a
     /// deliberate nudge still moves the avatar, large enough to survive the
     /// wobble in a normal click.
@@ -53,7 +59,7 @@ struct AvatarHost: View {
 
     var body: some View {
         ScaledAvatar(style: settings.styleID,
-                     input: store.avatarInput,
+                     input: input,
                      scale: settings.scale,
                      opacity: settings.opacity)
             // minimumDistance 0 so the press is tracked from the first event;
@@ -81,10 +87,23 @@ struct AvatarHost: View {
                         ui.lastMouse = nil
                         ui.pressMouse = nil
                         ui.dragDistance = 0
-                        if wasClick { onClick() }
+                        if wasClick {
+                            // Recorded before the popover opens, so the sprite
+                            // starts reacting on the same frame the panel does.
+                            ui.clickedAt = Date().timeIntervalSinceReferenceDate
+                            onClick()
+                        }
                     }
             )
             .help(tooltip)
+    }
+
+    /// The store's reading plus the one thing the store cannot know: that the
+    /// user just clicked this window.
+    private var input: AvatarInput {
+        var input = store.avatarInput
+        input.clickedAt = ui.clickedAt
+        return input
     }
 
     /// The numbers the compact styles cannot show, one hover away. Clicking

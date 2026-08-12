@@ -38,6 +38,18 @@ struct PixelCreatureAvatar: View {
     /// How far the sunglasses travel to clear the head entirely.
     private static let visorRise: CGFloat = 9
 
+    /// The click hop, as the four frames it is drawn in: up, peak, down, landed.
+    ///
+    /// Straight off the reference composition, where the whole creature — but
+    /// not the laptop — is translated in whole steps rather than eased. Grid
+    /// units, negative being up, so the peak is a quarter of the body's height
+    /// and the creature never leaves its own square.
+    private static let hopFrames: [CGFloat] = [-0.9, -1.5, -0.6, 0]
+    /// One frame each; 0.6 s all told, which is over before the popover the
+    /// same click opened has finished appearing.
+    private static let hopStep: Double = 0.15
+    private static var hopSeconds: Double { hopStep * Double(hopFrames.count) }
+
     var body: some View {
         // Sampled at its steps rather than at a frame rate: see
         // `PixelStepSchedule`. `frame(at:)` ignores the clock when motion is
@@ -60,6 +72,12 @@ struct PixelCreatureAvatar: View {
         // they free-run off the wall clock, which is an origin of zero.
         let cue = input.stateChangedAt ?? 0
         var steps = Self.cycleSteps(input.state, cue: cue, blink: blinkPeriod)
+        // The hop is four frames and then it is over, so its wake-ups expire
+        // with it and an unclicked avatar carries none of them.
+        if let clicked = input.clickedAt {
+            steps.append(PixelStep(origin: clicked, period: Self.hopStep,
+                                   until: clicked + Self.hopSeconds))
+        }
         // A run only ever plays over calm or focused, so only those two carry
         // its wake-ups. The list covers the run playing now and the next one,
         // and is empty in between — the schedule that idles is the same one it
@@ -206,6 +224,14 @@ struct PixelCreatureAvatar: View {
             }
         }
 
+        // A click makes the creature jump, whatever it was doing. This is the
+        // one piece of motion that answers the user rather than the data, so it
+        // runs in the still states too — critical included, where holding
+        // still is about not miming alarm, not about ignoring being clicked.
+        // `empty` is the exception: there is no creature there to jump.
+        let hop = (live && marks != .empty) ? Self.hopOffset(at: now, input.clickedAt) : nil
+        if let hop { yOff += hop }
+
         // Calm is the only state that wears the sunglasses, so putting them on
         // and taking them off is the state change itself rather than a cycle:
         // up over half a second, back down over six tenths.
@@ -222,8 +248,21 @@ struct PixelCreatureAvatar: View {
         return PixelFrame(pose: pose, marks: marks,
                           fill: Self.bodyFill(p > 0.25 ? state : prev),
                           yOff: yOff, blink: blink, critBlink: critBlink,
-                          visor: visor, zRise: zRise,
+                          visor: visor, zRise: zRise, hopping: hop != nil,
                           halo: Self.halo(for: marks), coding: coding)
+    }
+
+    /// Where in the hop the creature is, or nil when it is not hopping.
+    ///
+    /// Quantised to whole frames like everything else here: the schedule wakes
+    /// the sprite on exactly these boundaries, so sampling between them would
+    /// only ever return a frame nobody is going to see.
+    private static func hopOffset(at now: Double, _ clicked: Double?) -> CGFloat? {
+        guard let clicked else { return nil }
+        let elapsed = now - clicked
+        guard elapsed >= 0, elapsed < hopSeconds else { return nil }
+        let i = min(hopFrames.count - 1, Int(elapsed / hopStep))
+        return hopFrames[i]
     }
 
     /// The grey states get a dark outline; the coloured ones do not need one.
@@ -365,9 +404,11 @@ struct PixelCreatureAvatar: View {
             }
             // A blink collapses the eye about its own centre rather than
             // dropping its lid, which on a 1.3 u square is the difference
-            // between a blink and a squint.
+            // between a blink and a squint. A hop squeezes them the same way
+            // but not all the way shut: half-closed on the way up is what makes
+            // the jump read as pleased rather than startled.
             let dx: CGFloat = f.marks == .noData ? -0.5 : 0
-            let h = f.blink ? 0.25 : pose.eyeW
+            let h = f.blink ? 0.25 : (f.hopping ? 0.45 : pose.eyeW)
             let y = pose.eyeY + (pose.eyeW - h) / 2
             rect(pose.eyeX1 + dx, y, pose.eyeW, h, ink)
             rect(pose.eyeX2 + dx, y, pose.eyeW, h, ink)
@@ -774,6 +815,9 @@ private struct PixelFrame {
     var visor: CGFloat
     /// How far the sleep glyphs have drifted, 0…1 of their travel.
     var zRise: CGFloat
+    /// Mid-hop, which also squeezes the eyes shut. The offset itself is
+    /// already in `yOff`, because a hop moves exactly what a bob moves.
+    var hopping: Bool
     /// Outline colour painted behind the body in the grey states, or nil
     /// when the fill contrasts with a background on its own.
     var halo: Color?

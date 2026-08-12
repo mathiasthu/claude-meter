@@ -290,6 +290,42 @@ MainActor.assumeIsolated {
           rendered == AvatarStyleID.allCases.count * MeterState.allCases.count,
           "\(rendered) combinations")
 
+    // --- clicking the avatar makes the pixel creature hop ---
+    //
+    // Measured off the rendered pixels rather than off the frame maths: the
+    // hop is only worth anything if it actually moves the artwork, and the
+    // offset passes through the timeline, the frame and every draw call on the
+    // way there. `strained` is the subject because it is a still state — a
+    // baseline that bobbed on its own would make the comparison meaningless.
+    @MainActor func inkTop(clickedAt: TimeInterval?, motion: Bool = true) -> Int? {
+        let input = AvatarInput(state: .strained, percentage: 75, fiveHour: 75,
+                                sevenDay: 38, context: 45, sessions: [75],
+                                motionAllowed: motion, clickedAt: clickedAt)
+        guard let image = ImageRenderer(
+            content: ScaledAvatar(style: .pixelCreature, input: input)).nsImage,
+            let data = image.tiffRepresentation,
+            let rep = NSBitmapImageRep(data: data) else { return nil }
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide
+            where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.2 {
+                return y
+            }
+        }
+        return nil
+    }
+    let now = Date().timeIntervalSinceReferenceDate
+    let resting = inkTop(clickedAt: nil)
+    // Mid-hop: far enough in to be off the first frame, well short of landing.
+    let peak = inkTop(clickedAt: now - 0.2)
+    check("click lifts the pixel creature",
+          resting != nil && peak != nil && peak! < resting!,
+          "resting \(resting.map(String.init) ?? "nil"), hopping \(peak.map(String.init) ?? "nil")")
+    check("the hop lands", inkTop(clickedAt: now - 5) == resting,
+          "\(inkTop(clickedAt: now - 5).map(String.init) ?? "nil") vs \(resting.map(String.init) ?? "nil")")
+    check("reduce motion suppresses the hop",
+          inkTop(clickedAt: now - 0.2, motion: false) == inkTop(clickedAt: nil, motion: false),
+          "\(inkTop(clickedAt: now - 0.2, motion: false).map(String.init) ?? "nil")")
+
     try? FileManager.default.removeItem(at: tmp)
     print(failures == 0 ? "\nALL PASS" : "\n\(failures) FAILED")
     exit(failures == 0 ? 0 : 1)
