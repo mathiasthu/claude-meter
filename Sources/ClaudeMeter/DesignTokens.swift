@@ -39,6 +39,24 @@ enum Tokens {
     /// only escalation re-tints it, so orange at rest reads as "fine".
     static let brandOrange = dyn(light: 0xD97757, dark: 0xD97757)
 
+    // The side notch's chrome: the strip itself, the empty half of a ring, the
+    // disc under a selected one, and the popover's own surface. These are the
+    // only tokens here that do not vary with the appearance — the notch is an
+    // instrument bolted to the edge of the screen and is drawn dark in both, so
+    // a light desktop gets the same black slab rather than a white one with the
+    // readings washed out of it. Nothing below ever carries a reading; those
+    // still come from the ramp above.
+    static let notchTop      = NSColor(hex: 0x15161A)
+    static let notchBottom   = NSColor(hex: 0x08080A)
+    static let notchHairline = NSColor(white: 1, alpha: 0.09)
+    static let notchTrack    = NSColor(white: 1, alpha: 0.12)
+    /// The disc behind the ring whose popover is open. The same value as the
+    /// hairline on purpose: the selection is a whisper, and a brighter one
+    /// competes with the reading it is meant to point at.
+    static let notchHalo     = NSColor(white: 1, alpha: 0.09)
+    static let notchSurface  = NSColor(hex: 0x131316)
+    static let notchBorder   = NSColor(white: 1, alpha: 0.08)
+
     // SwiftUI-side accessors.
     static var calmC: Color     { Color(nsColor: calm) }
     static var focusedC: Color  { Color(nsColor: focused) }
@@ -50,6 +68,13 @@ enum Tokens {
     static var groundC: Color   { Color(nsColor: ground) }
     static var hairlineC: Color { Color(nsColor: hairline) }
     static var brandOrangeC: Color { Color(nsColor: brandOrange) }
+    static var notchTopC: Color      { Color(nsColor: notchTop) }
+    static var notchBottomC: Color   { Color(nsColor: notchBottom) }
+    static var notchHairlineC: Color { Color(nsColor: notchHairline) }
+    static var notchTrackC: Color    { Color(nsColor: notchTrack) }
+    static var notchHaloC: Color     { Color(nsColor: notchHalo) }
+    static var notchSurfaceC: Color  { Color(nsColor: notchSurface) }
+    static var notchBorderC: Color   { Color(nsColor: notchBorder) }
 
     private static func dyn(light: Int, dark: Int) -> NSColor {
         NSColor.dynamic(light: NSColor(hex: light), dark: NSColor(hex: dark))

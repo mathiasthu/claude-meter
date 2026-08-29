@@ -171,6 +171,18 @@ final class SnapshotStore: ObservableObject {
         liveSessions.compactMap { $0.context.usedPercentage }.max()
     }
 
+    /// The live session `worstContext` came from — the one the context ring is
+    /// actually about.
+    ///
+    /// Expressed against `worstContext` rather than as a `max(by:)` over the
+    /// sessions on purpose: `max(by:)` still returns a session when every
+    /// percentage is nil, which would put a name, a model and a token count
+    /// beside a ring that has no reading in it.
+    var worstContextSession: Snapshot? {
+        guard let worst = worstContext else { return nil }
+        return liveSessions.first { $0.context.usedPercentage == worst }
+    }
+
     /// Seconds since the freshest snapshot, or nil when there are none.
     var newestAge: TimeInterval? { sessions.map(\.age).min() }
 
@@ -200,7 +212,10 @@ final class SnapshotStore: ObservableObject {
 
     /// Packaged for the avatar styles.
     var avatarInput: AvatarInput {
-        AvatarInput(
+        // Resolved once: the lookup scans the live sessions, and the notch asks
+        // it four questions about the same session.
+        let ctx = worstContextSession
+        return AvatarInput(
             state: state,
             percentage: drivingPercentage,
             fiveHour: fiveHour,
@@ -213,7 +228,16 @@ final class SnapshotStore: ObservableObject {
             showsBackground: settings.showBackground,
             criticalBlinkSeconds: settings.criticalBlinkSeconds,
             previousState: priorState,
-            stateChangedAt: stateChangedAt
+            stateChangedAt: stateChangedAt,
+            sevenDayResetsAt: sevenDayResetsAt,
+            fiveHourHasReset: fiveHourHasReset,
+            sevenDayHasReset: sevenDayHasReset,
+            contextName: ctx?.displayName,
+            contextModel: ctx?.model,
+            contextTokens: ctx?.context.totalInputTokens,
+            contextSize: ctx?.context.size,
+            thresholds: settings.thresholds,
+            contextAge: ctx?.age
         )
     }
 

@@ -125,11 +125,21 @@ enum RenderGrid {
                     startPoint: .topLeading, endPoint: .bottomTrailing)
                 // Padding rather than a fixed width: the pill grows with its
                 // text, and a constant-width cell was clipping its right end.
+                //
+                // A magnification rather than a metric multiplier, and 1 for
+                // everything that is not docked: render the sheet with the
+                // notch row filtered out and the PNG is byte-identical to the
+                // four-row one, which is how this was checked. With the row in,
+                // the older rows still move by up to 2/255 on a few hundred
+                // antialiased pixels — a taller canvas rounds its shadow blur
+                // differently. Geometry is untouched; a one-pixel shift in any
+                // direction scores far worse than not shifting at all.
                 ScaledAvatar(style: style, input: input)
+                    .scaleEffect(style.sheetScale)
                     .padding(.horizontal, 12)
                     .frame(minWidth: 76)
             }
-            .frame(height: 68)
+            .frame(height: style.sheetCellHeight)
             .fixedSize(horizontal: true, vertical: false)
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .environment(\.colorScheme, scheme)

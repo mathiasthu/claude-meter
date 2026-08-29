@@ -326,6 +326,248 @@ MainActor.assumeIsolated {
           inkTop(clickedAt: now - 0.2, motion: false) == inkTop(clickedAt: nil, motion: false),
           "\(inkTop(clickedAt: now - 0.2, motion: false).map(String.init) ?? "nil")")
 
+    // --- the side notch -------------------------------------------------
+    //
+    // Measured off pixels rather than off the model, for the reason the hop is:
+    // the invariant that matters is what reaches the screen, and "absent is not
+    // zero" passes through the readings, the ramp, a Canvas and a stroke style
+    // on the way there. A dashed ring and a 0% arc are indistinguishable in
+    // every intermediate value and obvious in the bitmap.
+
+    /// The strip's colours resolve dark whatever the system is set to, so the
+    /// expected values have to be resolved the same way.
+    @MainActor func darkRGB(_ c: NSColor) -> (CGFloat, CGFloat, CGFloat) {
+        var out = c
+        NSAppearance(named: .darkAqua)?.performAsCurrentDrawingAppearance {
+            out = c.usingColorSpace(.sRGB) ?? c
+        }
+        return (out.redComponent, out.greenComponent, out.blueComponent)
+    }
+
+    @MainActor func bitmap(_ input: AvatarInput, scale: CGFloat = 1) -> NSBitmapImageRep? {
+        let r = ImageRenderer(content: NotchStrip(input: input, scale: scale))
+        r.scale = 1
+        guard let image = r.nsImage, let data = image.tiffRepresentation else { return nil }
+        return NSBitmapImageRep(data: data)
+    }
+
+    func near(_ a: (CGFloat, CGFloat, CGFloat), _ b: (CGFloat, CGFloat, CGFloat)) -> Bool {
+        abs(a.0 - b.0) < 0.08 && abs(a.1 - b.1) < 0.08 && abs(a.2 - b.2) < 0.08
+    }
+
+    /// Counts, in the band the ring is stroked into, the pixels drawn in a live
+    /// ramp colour and the pixels drawn in the dormant grey.
+    ///
+    /// A band rather than the whole 46 pt box: the tag sits at the centre in
+    /// near-white ink, and the antialiased edge of its glyphs runs the whole
+    /// way down to the strip's near-black, passing through the dormant grey on
+    /// the way. Eighteen pixels of "5H" were enough to make a live arc look
+    /// like it had grey in it.
+    @MainActor func ringPixels(_ input: AvatarInput, _ ring: NotchRing,
+                               ramp: NSColor) -> (ramp: Int, dormant: Int) {
+        guard let rep = bitmap(input) else { return (0, 0) }
+        let sx = CGFloat(rep.pixelsWide) / NotchMetrics.width(scale: 1)
+        let sy = CGFloat(rep.pixelsHigh) / NotchMetrics.height(scale: 1)
+        let cx = NotchMetrics.width(scale: 1) / 2
+        let cy = NotchMetrics.ringCentreY(ring.index, scale: 1)
+        let half = NotchMetrics.ringDiameter(scale: 1) / 2
+        let wanted = darkRGB(ramp), grey = darkRGB(Tokens.dormant)
+        let stroke = NotchMetrics.ringStroke(scale: 1)
+        let inner = NotchMetrics.ringRadius(scale: 1) - stroke
+        var hot = 0, cold = 0
+        for y in Int((cy - half) * sy)..<Int((cy + half) * sy) {
+            for x in Int((cx - half) * sx)..<Int((cx + half) * sx) {
+                guard y >= 0, x >= 0, y < rep.pixelsHigh, x < rep.pixelsWide else { continue }
+                let d = hypot(CGFloat(x) / sx - cx, CGFloat(y) / sy - cy)
+                guard d >= inner, d <= half,
+                      let px = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                      px.alphaComponent > 0.6 else { continue }
+                let rgb = (px.redComponent, px.greenComponent, px.blueComponent)
+                if near(rgb, wanted) { hot += 1 }
+                if near(rgb, grey) { cold += 1 }
+            }
+        }
+        return (hot, cold)
+    }
+
+    @MainActor func notchInput(_ state: MeterState, five: Double?, seven: Double?,
+                               ctx: Double?, edge: NotchEdge = .right,
+                               selected: NotchRing? = nil) -> AvatarInput {
+        var i = AvatarInput(state: state, percentage: five, fiveHour: five,
+                            fiveHourResetsAt: Date().timeIntervalSince1970 + 3600,
+                            sevenDay: seven, context: ctx, sessions: [ctx],
+                            age: 12, motionAllowed: false)
+        i.notchEdge = edge
+        i.selectedRing = selected
+        return i
+    }
+
+    // A reading that exists is an arc in its ramp colour and nothing grey.
+    let live = ringPixels(notchInput(.focused, five: 58, seven: 31, ctx: 22),
+                          .fiveHour, ramp: Tokens.focused)
+    check("a known reading draws its arc", live.ramp > 0 && live.dormant == 0,
+          "ramp \(live.ramp), dormant \(live.dormant)")
+
+    // The same input with the reading removed is dashed grey and nothing else.
+    let unknown = ringPixels(notchInput(.focused, five: nil, seven: 31, ctx: 22),
+                             .fiveHour, ramp: Tokens.focused)
+    check("an unknown reading is dashed instead", unknown.ramp == 0 && unknown.dormant > 0,
+          "ramp \(unknown.ramp), dormant \(unknown.dormant)")
+
+    // Old data is dashed on every ring even though all three numbers are here.
+    let staleInput = notchInput(.stale, five: 92, seven: 61, ctx: 88)
+    var staleRamp = 0
+    for (ring, colour) in [(NotchRing.fiveHour, Tokens.critical),
+                           (NotchRing.sevenDay, Tokens.focused),
+                           (NotchRing.context, Tokens.critical)] {
+        staleRamp += ringPixels(staleInput, ring, ramp: colour).ramp
+    }
+    check("stale dashes every ring", staleRamp == 0, "ramp pixels \(staleRamp)")
+
+    // ...and dims the whole strip rather than relabelling each ring.
+    @MainActor func bodyAlpha(_ input: AvatarInput) -> CGFloat {
+        guard let rep = bitmap(input) else { return -1 }
+        let sx = CGFloat(rep.pixelsWide) / NotchMetrics.width(scale: 1)
+        let sy = CGFloat(rep.pixelsHigh) / NotchMetrics.height(scale: 1)
+        // Between the first and second readings: inside the body, clear of
+        // every ring and label.
+        return rep.colorAt(x: Int(38 * sx), y: Int(128 * sy))?.alphaComponent ?? -1
+    }
+    let dimmed = bodyAlpha(staleInput)
+    let bright = bodyAlpha(notchInput(.focused, five: 92, seven: 61, ctx: 88))
+    check("stale dims the strip", bright > 0.9 && dimmed / bright > 0.5 && dimmed / bright < 0.6,
+          String(format: "%.2f of %.2f", dimmed, bright))
+
+    // The open ring is marked, just outside its stroke and inside its halo.
+    @MainActor func haloBrightness(_ selected: NotchRing?) -> CGFloat {
+        let input = notchInput(.focused, five: 58, seven: 31, ctx: 22, selected: selected)
+        guard let rep = bitmap(input, scale: 2) else { return -1 }
+        let sx = CGFloat(rep.pixelsWide) / NotchMetrics.width(scale: 2)
+        let sy = CGFloat(rep.pixelsHigh) / NotchMetrics.height(scale: 2)
+        let cx = NotchMetrics.width(scale: 2) / 2
+        let cy = NotchMetrics.ringCentreY(0, scale: 2)
+        // Radius 44 at 2x: outside the stroke's outer edge at 42, inside the
+        // halo's 46.
+        var total: CGFloat = 0, n = 0
+        for degrees in stride(from: 15, to: 360, by: 30) {
+            let t = Double(degrees) * .pi / 180
+            let x = Int((cx + 44 * cos(t)) * sx), y = Int((cy + 44 * sin(t)) * sy)
+            guard x >= 0, y >= 0, x < rep.pixelsWide, y < rep.pixelsHigh,
+                  let px = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+            total += px.brightnessComponent * px.alphaComponent
+            n += 1
+        }
+        return n == 0 ? -1 : total / CGFloat(n)
+    }
+    let lit = haloBrightness(.fiveHour), unlit = haloBrightness(nil)
+    check("the selected ring gets a halo", lit > unlit,
+          String(format: "%.4f vs %.4f", lit, unlit))
+
+    // A left dock is the right one reflected, not the right one moved.
+    @MainActor func edgeSpan(_ edge: NotchEdge) -> (first: Int, last: Int, bytes: Data?) {
+        let input = notchInput(.focused, five: 58, seven: 31, ctx: 22, edge: edge)
+        guard let rep = bitmap(input) else { return (-1, -1, nil) }
+        let sy = CGFloat(rep.pixelsHigh) / NotchMetrics.height(scale: 1)
+        let row = Int(30 * sy)
+        var first = -1, last = -1
+        for x in 0..<rep.pixelsWide
+        where (rep.colorAt(x: x, y: row)?.alphaComponent ?? 0) > 0.5 {
+            if first < 0 { first = x }
+            last = x
+        }
+        return (first, last, rep.representation(using: .png, properties: [:]))
+    }
+    let right = edgeSpan(.right), left = edgeSpan(.left)
+    check("the right dock is flat on the right",
+          right.first > 0 && right.last >= 0, "x \(right.first)...\(right.last)")
+    check("the left dock mirrors it",
+          left.first == 0 && left.last < right.last, "x \(left.first)...\(left.last)")
+    check("the two docks are different pictures",
+          right.bytes != nil && right.bytes != left.bytes, "")
+
+    // --- scale clamping ---------------------------------------------------
+    check("the notch clamps a creature's scale", AvatarStyleID.sideNotch.clampScale(1.75) == 1.5,
+          "\(AvatarStyleID.sideNotch.clampScale(1.75))")
+    check("and clamps a tiny one up", AvatarStyleID.sideNotch.clampScale(0.2) == 0.75,
+          "\(AvatarStyleID.sideNotch.clampScale(0.2))")
+    check("creatures keep theirs", AvatarStyleID.pixelCreature.clampScale(1.75) == 1.75,
+          "\(AvatarStyleID.pixelCreature.clampScale(1.75))")
+
+    // --- notch settings round-trip -----------------------------------------
+    let notchSuite = "claude-meter-notch-\(getpid())"
+    let nd = UserDefaults(suiteName: notchSuite)!
+    nd.removePersistentDomain(forName: notchSuite)
+    let n1 = SettingsStore(defaults: nd)
+    check("default dock edge is right", n1.notchEdge == .right, "\(n1.notchEdge)")
+    check("default display is automatic", n1.notchScreenID == 0, "\(n1.notchScreenID)")
+    n1.notchEdge = .left
+    n1.notchScreenID = 69_733_382
+    nd.synchronize()
+    let n2 = SettingsStore(defaults: nd)
+    check("dock edge persists", n2.notchEdge == .left, "\(n2.notchEdge)")
+    check("display persists", n2.notchScreenID == 69_733_382, "\(n2.notchScreenID)")
+    n2.resetToDefaults()
+    check("reset restores the dock edge and display",
+          n2.notchEdge == .right && n2.notchScreenID == 0,
+          "\(n2.notchEdge), \(n2.notchScreenID)")
+    nd.removePersistentDomain(forName: notchSuite)
+
+    // --- readings agree with the store -------------------------------------
+    for f in (try? FileManager.default.contentsOfDirectory(at: sessions, includingPropertiesForKeys: nil)) ?? [] {
+        try? FileManager.default.removeItem(at: f)
+    }
+    // Written minutes apart on purpose. `newestAge` is the freshest snapshot
+    // across every session; the CTX row describes one particular session. Write
+    // both at the same instant and the two numbers coincide, which is exactly
+    // how a row that printed the wrong one of them passed for as long as it
+    // did — the hot session here is the stale one, the shape a subagent run
+    // produces.
+    write("hot-session", ctx: 66, five: 41, agoSeconds: 240)
+    write("cool-session", ctx: 12, five: 41)
+    store.reload()
+    let rs = NotchData.readings(store.avatarInput)
+    check("three readings, in ring order",
+          rs.count == 3 && rs.map(\.ring) == NotchRing.allCases, "\(rs.map(\.ring))")
+    check("the 5H reading is the store's", rs[0].pct == store.fiveHour,
+          "\(String(describing: rs[0].pct)) vs \(String(describing: store.fiveHour))")
+    check("the CTX row is titled with the worst live session",
+          rs[2].title == "hot-session" && store.worstContextSession?.displayName == "hot-session",
+          rs[2].title)
+    check("and its sub-line names the model and the tokens",
+          rs[2].sub.contains("Opus") && rs[2].sub.contains("1k / 200k"), rs[2].sub)
+    check("the store's newest snapshot is not the one the CTX ring is reading",
+          (store.newestAge ?? 999) < 60 && (store.worstContextSession?.age ?? 0) >= 240,
+          "newest \(Fmt.age(store.newestAge ?? -1)) vs ctx \(Fmt.age(store.worstContextSession?.age ?? -1))")
+    check("and the CTX sub-line ages that session, not the freshest one",
+          rs[2].sub.hasSuffix("· 4m ago"), rs[2].sub)
+
+    // A window past its reset is empty now, whatever the snapshot said — 0%
+    // with the moment it emptied, never a countdown to a time already gone.
+    for f in (try? FileManager.default.contentsOfDirectory(at: sessions, includingPropertiesForKeys: nil)) ?? [] {
+        try? FileManager.default.removeItem(at: f)
+    }
+    write("rolled-over", ctx: 20, five: 88, fiveResetsIn: -3600)
+    store.reload()
+    let reset = NotchData.readings(store.avatarInput)[0]
+    check("a rolled-over window reads 0%, not its last number", reset.pct == 0,
+          "\(String(describing: reset.pct))")
+    check("and says when it emptied, not when it will",
+          reset.sub.hasPrefix("reset ") && !reset.sub.contains("resets in"), reset.sub)
+
+    // No live session reports a context percentage: the ring has no reading,
+    // so nothing may put a name or a token count beside it.
+    for f in (try? FileManager.default.contentsOfDirectory(at: sessions, includingPropertiesForKeys: nil)) ?? [] {
+        try? FileManager.default.removeItem(at: f)
+    }
+    write("no-context", ctx: nil, five: 41)
+    store.reload()
+    check("no context anywhere leaves worstContextSession nil",
+          store.worstContextSession == nil, "\(String(describing: store.worstContextSession?.sessionId))")
+    let blind = NotchData.readings(store.avatarInput)[2]
+    check("and the CTX row falls back rather than naming a session",
+          blind.title == "Session context" && blind.pct == nil && blind.sub == "no live session",
+          "\(blind.title) / \(blind.sub)")
+
     try? FileManager.default.removeItem(at: tmp)
     print(failures == 0 ? "\nALL PASS" : "\n\(failures) FAILED")
     exit(failures == 0 ? 0 : 1)

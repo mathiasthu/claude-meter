@@ -8,8 +8,12 @@ pixel creature; the collector's history trail landed 2026-08-09. On 2026-08-11
 the critical creature stopped moving — it is red and blinks, and the blink
 period became a setting — and the status line's muted text stopped being
 unreadable. On 2026-08-12 the avatar's popover stopped opening 60 pt clear of
-the sprite, and clicking the pixel creature makes it hop. Menubar item +
-floating avatar + settings window + status line HUD, all live. `com.momentumminds.claude-meter` LaunchAgent loaded, `RunAtLoad`
+the sprite, and clicking the pixel creature makes it hop. On 2026-08-29 the
+side notch landed: a fifth avatar style that docks the panel flush to a screen
+edge and shows the 5-hour window, the 7-day window and the worst live session's
+context as three rings, each opening its own breakdown popover. Menubar item +
+floating or docked avatar + settings window + status line HUD, all live.
+`com.momentumminds.claude-meter` LaunchAgent loaded, `RunAtLoad`
 + `KeepAlive`, deployed from `dist/ClaudeMeter.app`.
 
 Up to 2026-08-08 the only machine this had ever worked on was this one. The
@@ -26,7 +30,7 @@ Verified against real payloads, not synthetic ones:
   elapsed reset, 1M context, empty stdin, malformed stdin, path-unsafe
   session_id). Runs in ~60 ms against a 3 s chain deadline; the one refresh a
   minute that also appends history is ~70 ms.
-- Store, settings and styles: `scripts/selftest.sh`, 60 assertions, all pass.
+- Store, settings and styles: `scripts/selftest.sh`, 86 assertions, all pass.
 - Installer, hooks and the history trail: `scripts/selftest-install.sh`, 55
   assertions, all pass — against a fake `$HOME`, a fake checkout and a stubbed
   clock, so none of it touches this machine.
@@ -37,6 +41,14 @@ Verified against real payloads, not synthetic ones:
   clipped, and `ScaledAvatar` force-framed every style to `naturalSize`, which
   cut off the pill (it grows with its text). `ScaledLayout` now reports the real
   intrinsic size.
+- That sheet was regenerated on 2026-08-29 for the side notch's fifth row, which
+  is the one deliberate break of its byte-identity check. The four creature rows
+  were verified unchanged first: rendering with the notch row filtered out gives
+  a file byte-identical to the previous commit, and with the row in, 328 of
+  6.0M pixels above it differ by 1/255 and one by 2/255 — antialiasing on shadow
+  edges, which round differently on a taller canvas. Geometry is untouched;
+  offsetting the comparison by a single pixel in any direction scores 100×
+  worse than not offsetting it.
 
 ### What is not covered by any test
 
@@ -46,8 +58,13 @@ Verified against real payloads, not synthetic ones:
   has not. `AvatarUIState.clickSlop` (3 pt) is the one knob if it ever
   mis-fires. What a click *produces* is covered: the hop is asserted from
   rendered pixels in `selftest.sh`, with `clickedAt` set directly.
-- Anything about how the app behaves over time — the panel surviving a display
-  change, the popover under a Space switch, the LaunchAgent after a reboot.
+- Anything about how the app behaves over time — the popover under a Space
+  switch, the LaunchAgent after a reboot. The panel surviving a display change
+  is half-covered now: the docked strip's rebuild-on-reconfiguration was proven
+  by a throwaway harness that stands up the real controller and posts the
+  display-parameters notification, but that harness needs a live `NSApp` and so
+  is not part of `selftest.sh` — nothing in the committed tests would catch a
+  regression there.
 
 ## The installer only ever worked here
 
@@ -103,7 +120,11 @@ menubar mark, the five-pane settings layout and the dropdown at none / one /
 three / ten sessions all come from that spec.
 
 `docs/avatar-states.png` is the implementation's own render of the same matrix,
-so it can be diffed against the spec sheet by eye.
+so it can be diffed against the spec sheet by eye. The fifth style, the side
+notch, came later and from its own canvas pair (`Main.dc.html` / `States.dc.html`
+in the notch blueprint); its row on the sheet is rendered at `sheetScale` 0.42
+in a 190 pt cell, because a 344 pt strip does not fit the 68 pt cell the four
+creatures are reviewed in.
 
 ## How the data gets here
 
@@ -483,6 +504,167 @@ committed PNG" was a coin toss. Two consecutive renders are now byte-identical.
 Style order in `AvatarStyleID` is the order of both the picker grid and the rows
 on that sheet, so changing it re-renders `docs/avatar-states.png`. The pixel
 creature leads because it is the default.
+
+## The side notch
+
+A fifth style, and the only one that is an instrument rather than a character:
+a 76 × 344 pt strip docked flush against a screen edge with all three readings
+live at once — 5-hour, 7-day, and the worst live session's context — each a ring
+you can click for a breakdown.
+
+### It is a style, not a second HUD
+
+An earlier draft made it its own panel with its own visibility setting. It is a
+case of `AvatarStyleID` instead, and `AvatarStyleID.isDocked` is the only branch
+point: `avatarVisible` still governs whether a HUD is up and `styleID` still
+governs which one, so "one HUD at a time" falls out rather than being enforced.
+What makes that work is that `AvatarInput` was already the channel for state a
+struct view cannot hold — it carries `clickedAt` and `criticalBlinkSeconds` for
+exactly this reason — so `selectedRing`, `notchEdge` and `thresholds` ride the
+same way and `NotchStrip` stays a pure function of one struct. Do not
+re-litigate this; the alternative costs a second panel, a second visibility
+setting, and a settings pane that has to explain the difference.
+
+### It takes scale as a multiplier, and `clampScale` is the only way to read it
+
+`scalesItself` was the pill's flag and is now the notch's too: the strip is type
+and stroke weights, so it is drawn at its final size rather than rasterised at
+76 pt and resampled. Every number in `NotchStrip` and `NotchMetrics` is
+therefore a multiple of `s`, and one that forgets to be is invisible at 100% and
+obvious at 150%.
+
+`scaleRange` narrows to 0.75…1.5 for it — 344 pt × 4 is taller than the display
+— and **every read of `settings.scale` goes through `style.clampScale(_:)`**.
+The stored value is never rewritten: visiting the notch and coming back must
+give the creature its 1.75 again. The scale slider reads through a proxy binding
+for that reason, because a control asked to display a value outside its own
+range is entitled to write back the nearest one it can.
+
+`ScaledAvatar` deliberately does *not* clamp. It never reads settings, and the
+picker tile and the state sheet pass it presentation scales (`thumbScale` 0.13)
+that a clamp would floor at 0.75 and burst out of a 48 pt cell.
+
+### Docking, and the line that quietly destroys `avatar.origin`
+
+`AvatarPanel.resizeToFit()` places by a four-row table on
+`(wasDocked, isDocked)`: dock when the new style is docked (the edge, screen or
+scale may all have moved), `restorePosition()` when coming off the edge, and the
+existing plant-and-clamp when neither end is docked. `dock()` uses
+`screen.frame` on the docked axis — flush means over the Dock — and
+`visibleFrame` vertically, so the menubar does not push the strip off centre.
+`clampOnScreen()` returns early when docked, or it would pull the strip out from
+under the menubar every time the style changed.
+
+**`savePosition()` must return early when docked.** It is driven by
+`didMoveNotification` and `dock()` moves the window, so without the guard the
+first switch to the notch overwrites the saved floating origin with the screen
+edge. Nothing looks wrong at the time. You find out on the *second* switch, when
+the creature comes back flush against the edge and stays there for every launch
+after. Proven by a harness that parks the panel, docks right, docks left,
+undocks, and does it all again, reading `avatar.origin` at each step.
+
+`ringRect(_:)` replaces `spriteBounds()` for this style. `spriteBounds()`
+measures painted pixels, and the strip is opaque across its whole band, so it
+would answer "the entire window" for every ring. Both `ringRect` and the strip's
+own ring column are derived from `NotchMetrics` alone, which is what makes where
+you click and where the arrow lands provably the same ring.
+
+Ring centres come out at 70/162/254. The design canvas authored them at
+71/165/259, which do not agree with its own flexbox; deriving them from the box
+model is within 5 pt, self-consistent, and survives a change to the label font.
+The canvas's drop shadow was dropped too — it exists because the mockup floats
+the strip on a rendered desktop, and a docked strip has three edges off-screen
+and its own hairline on the fourth.
+
+### The popover: three AppKit behaviours that had to be worked around
+
+The breakdown is a real `NSPopover` (`.vibrantDark`), built from the same
+`NotchData.readings` call the strip makes — the structural guarantee that a ring
+and its row can never disagree. Three things about it are not obvious, and all
+three were measured rather than guessed:
+
+1. **`.applicationDefined`, not `.transient`.** Ring-to-ring is the primary
+   interaction and a transient popover dismisses on the way in: whether the
+   mouse-down that closes it also reaches the tap gesture that would reopen it
+   is a race. Dismissal is a global + local `.leftMouseDown` monitor pair
+   installed on open and torn down on close, which closes unless the click
+   landed in the strip (let the gesture decide) or in the popover itself.
+2. **`NSPopover.isShown` cannot be trusted here, and `popoverDidClose` never
+   arrives.** A popover anchored to a `.nonactivatingPanel` still reports
+   `isShown == true` after a programmatic `close()`, and AppKit posts the
+   delegate callback only when it dismisses the popover itself. The controller
+   keeps its own `avatarPopoverShown` flag, and `teardownAvatarPopover()` does
+   explicitly everything the notification used to be trusted for — guarded, so
+   the delegate path and the explicit path can never both run and unbalance
+   `endFineUpdates()`. The four floating styles never hit any of this because
+   AppKit dismisses their `.transient` popover itself.
+3. **The popover instance is replaced after every dismissal, and the panel is
+   rebuilt whenever the window is moved.** An `NSPopover` does not come back
+   from a programmatic close on this anchor — every later `show(relativeTo:)`
+   quietly does nothing, so the second ring you clicked opened an empty screen.
+   Worse, a *window* that has hosted a popover keeps being placed against where
+   it was: re-dock the strip to the other edge and the next ring popover opens
+   at the old edge, 2000 pt away and off the side of the display, and it never
+   settles no matter how long you wait. Neither a fresh `NSPopover` nor a fresh
+   positioning view shakes that off — only a window that has never hosted one.
+
+   The trigger is the *move*, not the edge, and keying it on `notchEdge` alone
+   left three ways to reach the bug with the edge untouched. `AvatarPanel`
+   re-docks on any `didChangeScreenParametersNotification` — a monitor
+   unplugged, a lid closed, an arrangement dragged about — which is not a
+   settings change and so was never seen by the controller at all;
+   `notchScreenID` walks the strip to another display and was read only inside
+   `dockScreen()`; and coming back to `.sideNotch` from a creature re-docks
+   through `resizeToFit()`'s `(_, true)` branch with the edge exactly where it
+   was. So `settingsChanged()` now tracks `lastScreenID` beside `lastStyle` and
+   `lastEdge` and rebuilds when any of the three moves *and* either the old or
+   the new style is docked — which is precisely the condition under which
+   `resizeToFit()` calls `dock()` or `restorePosition()`, the only two paths
+   that reposition the window behind the popover's back. The display-parameters
+   observer no longer re-docks; it calls back into
+   `MenubarController.displaysChanged()`, which rebuilds instead (on the next
+   main-actor turn — `rebuildAvatar()` drops the last reference to the panel
+   that owns the closure making the call). Scale and opacity stay off the list
+   deliberately: this runs on every settings tick, and those may move with the
+   popover open.
+
+   Proven by a harness that stands up the real controller and the real panel in
+   its own `UserDefaults` domain, opens a ring popover, then posts the
+   display-parameters notification and watches the panel come back as a
+   different object — plus the negatives, so the fix cannot quietly become a
+   rebuild on every tick. None of this reproduces with a bare `NSPanel` outside
+   the app, so do not go looking for it in a minimal test case.
+
+The strip runs on the coarse tick; the popover takes `beginFineUpdates()`
+because it prints "12s ago".
+
+### Absent is not zero, here most of all
+
+Three rings make it three times as easy to draw a number that does not exist. A
+missing reading is a `[3, 5]` dashed dormant ring and an em-dash, never a 0%
+arc; a stale or sleeping one dashes all three and dims the strip to 0.55, never
+a grey arc; and a window past its `resets_at` genuinely *is* 0%, drawn at full
+opacity with "reset 8h ago" rather than a countdown to a moment already gone.
+`.noData` still draws the context ring — rate limits never arriving is
+orthogonal to context, which is what `PillAvatar.caption` already does.
+
+Four selftest assertions measure this off the rendered pixels rather than off
+the model, in the band the ring is stroked into: a live reading gives ramp
+pixels and no grey, the same input with the reading removed gives grey and no
+ramp. The band matters — the tag sits at the centre in near-white ink and the
+antialiased edge of its glyphs runs down to the strip's near-black, passing
+through the dormant grey on the way. Eighteen pixels of "5H" were enough to make
+a live arc look like it had grey in it.
+
+The same rule applies to the age under the CTX row, which is why it reads
+`AvatarInput.contextAge` and not `age`. `age` is `newestAge` — the freshest
+snapshot across every session, the app's "are these numbers current at all"
+reading — while every other field on that row comes from `worstContextSession`.
+The two part company exactly when it matters: one session sits in a long
+subagent run and stops publishing a status line while a second, quieter session
+keeps updating, and the row printed "180k / 200k · 10s ago" beside a 90% that
+was forty minutes old. `SessionListView.row()` had always used each session's
+own `s.age`; the notch now does too.
 
 ## A rate-limit window is only true until it resets
 
@@ -958,10 +1140,20 @@ order, because each one unblocks the next:
   before the window resets" are all a decode away. A Swift reader wants to
   stream the tail rather than parse the whole file, and to skip a line it cannot
   decode rather than give up on the file.
-- `docs/settings-avatar.png` is one row out of date: it predates the Critical
-  blink slider on the Avatar pane. Regenerating it needs a real screenshot —
-  `ImageRenderer` draws `Slider` as a placeholder block, so `--render-ui` cannot
-  do it. `--open-settings --settings-pane avatar` and a window capture will.
+- `docs/settings-avatar.png` is now two rounds out of date: it predates the
+  Critical blink slider, and it predates the side notch's fifth style tile and
+  the docked-edge and display controls under it. Regenerating it needs a real
+  screenshot — `ImageRenderer` draws `Slider` and `Picker` as placeholder
+  blocks, so `--render-ui` cannot do it. `--open-settings --settings-pane
+  avatar` and a window capture will.
+- Decide what a scale change should do to a docked strip's popover anchor.
+  Changing scale resizes the window and `dock()` re-places it, so the anchor
+  goes stale exactly the way an edge change used to — but scale and opacity are
+  deliberately off the rebuild list, because `settingsChanged()` runs on every
+  tick and dropping the panel mid-drag would be worse than the stale anchor.
+  The popover is rarely open while someone drags the scale slider, which is why
+  this was left rather than fixed; if it does bite, the fix is to close the
+  popover on a scale change rather than to rebuild the panel.
 - Decide whether the pixel creature sits too high in its ground. Content spans
   y 6–31.5 in a 48 pt box, so there is 6 pt above and 16.5 pt below. It is
   faithful to the spec's coordinates, which is why it was left alone; shifting
@@ -985,7 +1177,7 @@ order, because each one unblocks the next:
 ```bash
 ./install.sh                 # build + wire + load. idempotent.
 ./scripts/build-app.sh       # rebuild the bundle only
-./scripts/selftest.sh        # 60 headless assertions: store, settings, styles
+./scripts/selftest.sh        # 86 headless assertions: store, settings, styles, notch
 ./scripts/selftest-install.sh # 55 assertions: installer, hooks, collector, doctor
 bin/claude-meter-doctor      # why is the menubar empty. read-only.
 launchctl kickstart -k gui/$UID/com.momentumminds.claude-meter   # restart the app
@@ -994,6 +1186,7 @@ launchctl kickstart -k gui/$UID/com.momentumminds.claude-meter   # restart the a
 ./dist/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --render-ui /tmp/ui.png   # popover at 0/3/10 sessions
 ./.build/release/ClaudeMeter --open-settings --settings-pane thresholds &   # real window, for a screenshot
 ./.build/release/ClaudeMeter --open-avatar-popover &                       # avatar's popover, real .accessory path
+./.build/release/ClaudeMeter --open-avatar-popover --ring 5h &              # the notch's breakdown for one ring (5h|7d|ctx)
 
 echo '{...}' | bin/claude-meter-collect                    # exercise the collector
 jq . ~/.local/state/claude-meter/last-raw.json             # what Claude Code last sent

@@ -14,16 +14,29 @@ final class AvatarPanel: NSPanel {
     private static let originKey = "avatar.origin"
 
     private var moveObserver: AnyObject?
+    private var screenObserver: AnyObject?
     private var settingsObserver: AnyCancellable?
     /// Held here so the drag bookkeeping survives re-renders -- see
-    /// AvatarUIState for why this is not `@State`.
-    private let ui = AvatarUIState()
+    /// AvatarUIState for why this is not `@State`. Reachable from the menubar
+    /// controller, which has to clear the open ring when the popover closes.
+    let ui = AvatarUIState()
     private let settings: SettingsStore
     private var host: NSHostingView<AvatarHost>!
+    /// What to do when the displays are rearranged under a docked strip. The
+    /// panel deliberately does not act on it itself — see the observer below.
+    private let onDisplaysChanged: () -> Void
+
+    /// Whether the current style lives against a screen edge, and whether the
+    /// last one did. The pair is what makes the transition legible: docking,
+    /// undocking and staying put need three different placements.
+    private var isDocked: Bool { settings.styleID.isDocked }
+    private var wasDocked = false
 
     init(store: SnapshotStore, settings: SettingsStore = .shared,
-         onClick: @escaping () -> Void = {}) {
+         onClick: @escaping (NotchRing?) -> Void = { _ in },
+         onDisplaysChanged: @escaping () -> Void = {}) {
         self.settings = settings
+        self.onDisplaysChanged = onDisplaysChanged
         super.init(
             contentRect: NSRect(origin: .zero, size: settings.styleID.naturalSize),
             // .borderless drops the title bar; .nonactivatingPanel is what
@@ -56,13 +69,37 @@ final class AvatarPanel: NSPanel {
         contentView = host
 
         applySettings()
+        // resizeToFit already places a docked style against its edge, and the
+        // saved origin belongs to the floating one — restoring it here would
+        // pull the strip straight off the edge it had just been put on.
         resizeToFit()
-        restorePosition()
+        if !isDocked { restorePosition() }
 
         moveObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didMoveNotification, object: self, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.savePosition() }
+        }
+
+        // A floating window on a screen that has gone away is misplaced, and
+        // the user can drag it back. A docked one is off-screen entirely, with
+        // nothing left to grab.
+        //
+        // Re-docking from here is the obvious fix and the wrong one. This
+        // fires on any display reconfiguration — a monitor unplugged, a lid
+        // closed, an arrangement dragged about in System Settings — with no
+        // settings change behind it, so the controller never hears about it,
+        // and a window that has hosted a popover goes on placing the next one
+        // where it used to be. Handing the move up means the panel is dropped
+        // and rebuilt exactly as it is for a deliberate edge change.
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isDocked else { return }
+                self.onDisplaysChanged()
+            }
         }
 
         // Style, scale and the collection-behaviour toggles all change the
@@ -81,6 +118,9 @@ final class AvatarPanel: NSPanel {
     deinit {
         if let moveObserver {
             NotificationCenter.default.removeObserver(moveObserver)
+        }
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
         }
     }
 
@@ -120,7 +160,11 @@ final class AvatarPanel: NSPanel {
     // MARK: - Settings
 
     private func applySettings() {
-        ignoresMouseEvents = settings.ignoreMouse
+        // Click-through does not apply to a docked style. It is the avatar's
+        // setting — "let clicks fall through to the window behind the
+        // character" — and an instrument you cannot click is inert, which
+        // arrives as a bug report rather than as a preference.
+        ignoresMouseEvents = settings.ignoreMouse && !isDocked
         var behavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .stationary]
         if settings.floatOverFullScreen { behavior.insert(.fullScreenAuxiliary) }
         collectionBehavior = behavior
@@ -140,6 +184,12 @@ final class AvatarPanel: NSPanel {
     /// the new style into the same turn, which is what stops the new artwork
     /// being painted into a box still sized for the old one and then having
     /// the window resized around it.
+    ///
+    /// Both of those matter more since the notch arrived. Across a dock
+    /// transition the stale `fittingSize` is a 76x344 <-> 84x84 error rather
+    /// than a rounding one, and the placement that follows depends on getting
+    /// the size right first: `dock()` puts the *right edge* of the window on
+    /// the screen edge, so a wrong width parks it off-screen or short of it.
     private func resizeToFit() {
         host.needsLayout = true
         host.layoutSubtreeIfNeeded()
@@ -154,13 +204,90 @@ final class AvatarPanel: NSPanel {
                             width: fitted.width, height: fitted.height),
                      display: true)
         }
-        // Both of these are outside the size test on purpose. Laying the
-        // hosting view out above lets AppKit size the window to its new
-        // intrinsic size before this point, which leaves the branch above with
-        // nothing left to do — but the panel has still changed size, so it can
-        // still be hanging off an edge and it still has stale pixels to lose.
-        clampOnScreen()
+        // All of this is outside the size test on purpose. Laying the hosting
+        // view out above lets AppKit size the window to its new intrinsic size
+        // before this point, which leaves the branch above with nothing left to
+        // do — but the panel has still changed size, so it can still be hanging
+        // off an edge and it still has stale pixels to lose.
+        switch (wasDocked, isDocked) {
+        case (_, true):
+            // Docking, or already docked: the edge, the screen or the scale may
+            // all have moved, so re-dock either way.
+            dock()
+        case (true, false):
+            // Coming off the edge. The saved origin survived the visit intact
+            // because `savePosition()` refused to write while docked.
+            restorePosition()
+        case (false, false):
+            clampOnScreen()
+        }
         repaintContents()
+        wasDocked = isDocked
+    }
+
+    /// Puts the window flush against its screen edge, vertically centred.
+    ///
+    /// `screen.frame` on the docked axis and `visibleFrame` vertically: flush
+    /// means over the Dock and past the menubar, but centring against the full
+    /// frame would push the strip down by half the menubar's height.
+    private func dock() {
+        guard let screen = dockScreen() else { return }
+        let size = frame.size
+        let x = settings.notchEdge == .right
+            ? screen.frame.maxX - size.width
+            : screen.frame.minX
+        setFrameOrigin(NSPoint(x: x, y: screen.visibleFrame.midY - size.height / 2))
+    }
+
+    /// The display to dock to. Falls back the way `moveToDefaultCorner` learned
+    /// to: `NSScreen.main` is the screen holding the key window, and an agent
+    /// app has none.
+    private func dockScreen() -> NSScreen? {
+        let wanted = settings.notchScreenID
+        if wanted != 0, let match = NSScreen.screens.first(where: { $0.displayID == wanted }) {
+            return match
+        }
+        return NSScreen.main ?? NSScreen.screens.first
+    }
+
+    /// Where one ring sits inside the content view, in its flipped coordinates
+    /// — the contract `spriteBounds()` already answers for the floating styles.
+    ///
+    /// Arithmetic rather than a pixel measurement, because the strip is opaque
+    /// across its whole band and there is nothing for `spriteBounds()` to find:
+    /// every ring would measure as the entire window. Both this and the strip's
+    /// own column come off `NotchMetrics`, which is what makes them agree.
+    /// A view created solely to anchor one popover presentation, positioned at
+    /// `rect` in the content view's flipped coordinates.
+    ///
+    /// A fresh view every time, and that is the whole point. AppKit caches a
+    /// positioning view's screen geometry after its first presentation: show a
+    /// popover from the content view, dock the strip to the other edge, show
+    /// another, and the second lands where the strip used to be — measured at
+    /// 2000 pt away, off the side of the display, and it never settles no
+    /// matter how long the window has been still. A view that has never
+    /// anchored anything has nothing stale to remember.
+    func makePopoverAnchor(_ rect: NSRect) -> NSView {
+        clearPopoverAnchor()
+        let anchor = PopoverAnchorView(frame: rect)
+        host.addSubview(anchor)
+        popoverAnchor = anchor
+        return anchor
+    }
+
+    func clearPopoverAnchor() {
+        popoverAnchor?.removeFromSuperview()
+        popoverAnchor = nil
+    }
+
+    private var popoverAnchor: NSView?
+
+    func ringRect(_ ring: NotchRing) -> NSRect {
+        let s = settings.styleID.clampScale(settings.scale)
+        let d = NotchMetrics.ringDiameter(scale: s)
+        return NSRect(x: (NotchMetrics.width(scale: s) - d) / 2,
+                      y: NotchMetrics.ringCentreY(ring.index, scale: s) - d / 2,
+                      width: d, height: d)
     }
 
     /// The box the artwork actually paints into, in the content view's
@@ -230,6 +357,10 @@ final class AvatarPanel: NSPanel {
     /// Growing downward can push the panel under the bottom edge. Nudge it
     /// back rather than leaving it somewhere the user cannot grab it.
     private func clampOnScreen() {
+        // A docked window is deliberately flush against the physical edge, and
+        // `visibleFrame` stops short of it — clamping would pull the strip out
+        // from under the menubar and off its edge every time the style changed.
+        guard !isDocked else { return }
         guard let screen = NSScreen.screens.first(where: {
             $0.visibleFrame.intersects(frame)
         }) ?? NSScreen.main ?? NSScreen.screens.first else { return }
@@ -243,6 +374,15 @@ final class AvatarPanel: NSPanel {
     // MARK: - Position
 
     private func savePosition() {
+        // The single most destructive line in the docking work, and it is the
+        // absence of it that does the damage. This is driven by
+        // `didMoveNotification` and `dock()` moves the window, so without the
+        // guard the first switch to the notch overwrites the saved origin with
+        // the screen edge. Nothing looks wrong at the time — the strip is
+        // exactly where it belongs. You find out on the *second* switch, when
+        // the creature comes back flush against the edge and every subsequent
+        // launch puts it there.
+        guard !isDocked else { return }
         let origin = frame.origin
         UserDefaults.standard.set(["x": origin.x, "y": origin.y], forKey: Self.originKey)
     }
@@ -279,7 +419,25 @@ final class AvatarPanel: NSPanel {
 
     /// Bring it back into view when it has drifted off a disconnected display.
     func resetPosition() {
+        if isDocked { dock(); return }
         moveToDefaultCorner()
         savePosition()
+    }
+}
+
+/// Anchors a popover and does nothing else. Transparent to the mouse, or it
+/// would sit on top of the ring it exists to point at and eat the click.
+private final class PopoverAnchorView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+extension NSScreen {
+    /// The `CGDirectDisplayID` behind this screen, or 0 if AppKit will not say.
+    /// The only stable name for a display: `localizedName` is shared by two
+    /// identical monitors, and the index in `NSScreen.screens` renumbers on
+    /// replug.
+    var displayID: UInt32 {
+        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+            .uint32Value ?? 0
     }
 }

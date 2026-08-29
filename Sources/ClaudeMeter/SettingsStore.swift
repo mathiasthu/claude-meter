@@ -26,6 +26,13 @@ final class SettingsStore: ObservableObject {
     @Published var avatarVisible: Bool = true               { didSet { save() } }
     @Published var ignoreMouse: Bool = false                { didSet { save() } }
     @Published var floatOverFullScreen: Bool = true         { didSet { save() } }
+    /// Which screen edge a docked style sits against.
+    @Published var notchEdge: NotchEdge = .right            { didSet { save() } }
+    /// Which display it docks to, as a `CGDirectDisplayID`; 0 means whichever
+    /// one is current. Identity by display id rather than by name — two
+    /// identical monitors share a name — and rather than by index, which
+    /// renumbers when something is unplugged.
+    @Published var notchScreenID: UInt32 = 0                { didSet { save() } }
     /// The plate each style draws behind itself. Off by default: at avatar
     /// size it reads as a card with a picture in it rather than as the
     /// character. With it off the art gets a drop shadow instead.
@@ -93,6 +100,8 @@ final class SettingsStore: ObservableObject {
         static let visible = "avatar.visible"
         static let ignoreMouse = "avatar.ignoreMouse"
         static let fullScreen = "avatar.floatOverFullScreen"
+        static let notchEdge = "notch.edge"
+        static let notchScreen = "notch.screen"
         static let background = "avatar.showBackground"
         static let critBlink = "avatar.criticalBlinkSeconds"
         static let source = "state.source"
@@ -119,6 +128,12 @@ final class SettingsStore: ObservableObject {
         if let v = defaults.object(forKey: K.visible) as? Bool { avatarVisible = v }
         if let v = defaults.object(forKey: K.ignoreMouse) as? Bool { ignoreMouse = v }
         if let v = defaults.object(forKey: K.fullScreen) as? Bool { floatOverFullScreen = v }
+        if let s = defaults.string(forKey: K.notchEdge), let v = NotchEdge(rawValue: s) {
+            notchEdge = v
+        }
+        if let v = defaults.object(forKey: K.notchScreen) as? NSNumber {
+            notchScreenID = v.uint32Value
+        }
         if let v = defaults.object(forKey: K.background) as? Bool { showBackground = v }
         if let v = defaults.object(forKey: K.critBlink) as? Double {
             criticalBlinkSeconds = min(max(v, Self.blinkRange.lowerBound),
@@ -152,6 +167,8 @@ final class SettingsStore: ObservableObject {
         defaults.set(avatarVisible, forKey: K.visible)
         defaults.set(ignoreMouse, forKey: K.ignoreMouse)
         defaults.set(floatOverFullScreen, forKey: K.fullScreen)
+        defaults.set(notchEdge.rawValue, forKey: K.notchEdge)
+        defaults.set(NSNumber(value: notchScreenID), forKey: K.notchScreen)
         defaults.set(showBackground, forKey: K.background)
         defaults.set(criticalBlinkSeconds, forKey: K.critBlink)
         defaults.set(stateSource.rawValue, forKey: K.source)
@@ -173,6 +190,8 @@ final class SettingsStore: ObservableObject {
         avatarVisible = true
         ignoreMouse = false
         floatOverFullScreen = true
+        notchEdge = .right
+        notchScreenID = 0
         showBackground = false
         criticalBlinkSeconds = 1.5
         stateSource = .worst

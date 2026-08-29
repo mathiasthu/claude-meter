@@ -76,7 +76,8 @@ struct SessionListView: View {
                     .font(Typo.mono(11))
                     .foregroundStyle(.secondary)
             }
-            bar(pct, color: dormant ? Tokens.calmC : AvatarInput.ramp(pct, settings.thresholds))
+            MeterBar(pct: pct,
+                     color: dormant ? Tokens.calmC : AvatarInput.ramp(pct, settings.thresholds))
         }
     }
 
@@ -141,7 +142,7 @@ struct SessionListView: View {
                     .font(Typo.mono(11))
                     .fixedSize()
             }
-            bar(pct, color: sessionColor(pct))
+            MeterBar(pct: pct, color: sessionColor(pct))
             HStack(spacing: 6) {
                 Text(s.model ?? "—")
                     .lineLimit(1)
@@ -203,27 +204,5 @@ struct SessionListView: View {
         guard let age = store.newestAge else { return "No data yet" }
         if store.liveSessions.isEmpty { return "⏱ last seen \(Fmt.age(age)) ago" }
         return "Updated \(Fmt.age(age)) ago"
-    }
-
-    // MARK: - Bits
-
-    /// A percentage bar that reads as "unknown" when the value is missing —
-    /// a dashed empty track, never a 0% fill.
-    @ViewBuilder
-    private func bar(_ pct: Double?, color: Color) -> some View {
-        if let pct {
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.07))
-                    Capsule().fill(color)
-                        .frame(width: max(2, geo.size.width * min(1, pct / 100)))
-                }
-            }
-            .frame(height: 5)
-        } else {
-            Capsule()
-                .strokeBorder(Tokens.dormantC, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                .frame(height: 5)
-        }
     }
 }

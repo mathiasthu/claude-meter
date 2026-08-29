@@ -108,6 +108,48 @@ struct AvatarInput {
     /// to report and must keep drawing settled frames.
     var clickedAt: TimeInterval?
 
+    // Everything below is appended rather than filed beside the reading it
+    // belongs to, and must stay that way. The memberwise initialiser is
+    // positional, eight call sites pass labelled arguments in declaration
+    // order, and Swift will not let them be out of order — so inserting
+    // `sevenDayResetsAt` next to `sevenDay` is eight call sites to re-sort for
+    // no gain. Appending with defaults leaves every one of them alone.
+
+    var sevenDayResetsAt: Double?
+    /// Whether the window these percentages came from has since rolled over.
+    /// Read off the store rather than re-derived from the percentage: a window
+    /// past its reset genuinely reads 0%, and the only way to tell that apart
+    /// from a window that happens to be empty is to have been told.
+    var fiveHourHasReset: Bool = false
+    var sevenDayHasReset: Bool = false
+    /// The session behind the context reading — the one that will need
+    /// /compact first. Nil unless some live session actually reports a
+    /// percentage, so a name and a token count can never appear beside a ring
+    /// with no reading in it.
+    var contextName: String?
+    var contextModel: String?
+    var contextTokens: Int?
+    var contextSize: Int?
+    /// The ramp boundaries this input is drawn against. Carried here so a style
+    /// never reaches for `SettingsStore.shared`: that read is invisible to the
+    /// settings preview and to the offscreen renderers, both of which hand
+    /// styles an input the user's saved settings had no part in building.
+    var thresholds: Thresholds = .default
+    /// Which edge the docked strip is flush against.
+    var notchEdge: NotchEdge = .right
+    /// Which ring's breakdown is open. Nil everywhere except the floating
+    /// panel — same contract, and same reason, as `clickedAt`.
+    var selectedRing: NotchRing?
+    /// How old the snapshot behind `contextName`/`contextTokens` is, which is
+    /// not the same question `age` answers. `age` is the freshest snapshot
+    /// across every session — the app's "are these numbers current at all"
+    /// reading — while the context ring is looking at one particular session,
+    /// and the two part company exactly when it matters: a session sitting in
+    /// a long subagent run stops publishing a status line while a second,
+    /// quieter session keeps updating, so the ring's 90% can be forty minutes
+    /// old beside an `age` of ten seconds. Nil when no session is being named.
+    var contextAge: TimeInterval?
+
     /// Three or more concurrent sessions switches styles to their multi
     /// variant. Two is common enough to be unremarkable.
     var isMany: Bool { sessions.count >= 3 }

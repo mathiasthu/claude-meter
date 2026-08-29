@@ -35,8 +35,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // click either. This one deliberately does NOT promote the activation
         // policy, so it exercises the real .accessory path.
         if CommandLine.arguments.contains("--open-avatar-popover") {
+            // `--ring 5h|7d|ctx` opens the notch's breakdown for one reading.
+            // Without it the sprite's own popover opens, which is what the four
+            // floating styles have.
+            let args = CommandLine.arguments
+            let ring: NotchRing? = args.firstIndex(of: "--ring")
+                .flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+                .flatMap {
+                    switch $0 {
+                    case "5h":  return NotchRing.fiveHour
+                    case "7d":  return NotchRing.sevenDay
+                    case "ctx": return NotchRing.context
+                    default:    return nil
+                    }
+                }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                MainActor.assumeIsolated { controller.toggleAvatarPopover() }
+                MainActor.assumeIsolated { controller.toggleAvatarPopover(ring: ring) }
             }
         }
     }

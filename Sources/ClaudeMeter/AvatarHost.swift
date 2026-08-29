@@ -30,6 +30,12 @@ final class AvatarUIState: ObservableObject {
     /// needs to push an update.
     @Published var clickedAt: TimeInterval?
 
+    /// Which ring's breakdown is open, on a docked style. Published for the
+    /// same reason `clickedAt` is — the halo under the selected ring is drawn
+    /// by the strip, so the value has to reach it. Cleared by the menubar
+    /// controller when the popover closes.
+    @Published var selectedRing: NotchRing?
+
     /// Below this a press counts as a click, not a drag. Small enough that a
     /// deliberate nudge still moves the avatar, large enough to survive the
     /// wobble in a normal click.
@@ -49,8 +55,10 @@ struct AvatarHost: View {
     @ObservedObject var store: SnapshotStore
     @ObservedObject var settings: SettingsStore
     @ObservedObject var ui: AvatarUIState
-    /// Called on a press that did not turn into a drag.
-    var onClick: () -> Void = {}
+    /// Called on a press that did not turn into a drag. `nil` means the sprite
+    /// itself was hit, which is the only thing the four floating styles can
+    /// report; a ring means one of the notch's three readings was.
+    var onClick: (NotchRing?) -> Void = { _ in }
     /// Called once when a press begins, with the pointer in screen coordinates,
     /// so the panel can record where it was grabbed.
     var onGrab: (NSPoint) -> Void = { _ in }
@@ -58,9 +66,44 @@ struct AvatarHost: View {
     var onDrag: (NSPoint) -> Void = { _ in }
 
     var body: some View {
+        if settings.styleID.isDocked { docked } else { floating }
+    }
+
+    /// A docked style cannot move, so it gets no drag apparatus at all — not a
+    /// disabled one. There is no click-versus-drag decision to make on a window
+    /// with nowhere to go, and nothing left holding a stale `grabOffset`; the
+    /// slop bookkeeping stays exactly as it is for the four styles that need
+    /// it. What it gets instead is three tap targets, one per reading.
+    private var docked: some View {
+        let s = settings.styleID.clampScale(settings.scale)
+        return ZStack(alignment: .topLeading) {
+            ScaledAvatar(style: settings.styleID,
+                         input: input,
+                         scale: s,
+                         opacity: settings.opacity)
+            // Positioned from `NotchMetrics`, the same source `ringRect()` uses
+            // to aim the popover — so where you click and where the arrow lands
+            // are provably the same ring rather than two views that agree today.
+            ForEach(NotchRing.allCases) { ring in
+                Color.clear
+                    .frame(width: NotchMetrics.ringDiameter(scale: s),
+                           height: NotchMetrics.itemHeight(scale: s))
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        ui.selectedRing = ring
+                        onClick(ring)
+                    }
+                    .position(x: NotchMetrics.width(scale: s) / 2,
+                              y: NotchMetrics.itemCentreY(ring.index, scale: s))
+            }
+        }
+        .help(tooltip)
+    }
+
+    private var floating: some View {
         ScaledAvatar(style: settings.styleID,
                      input: input,
-                     scale: settings.scale,
+                     scale: settings.styleID.clampScale(settings.scale),
                      opacity: settings.opacity)
             // minimumDistance 0 so the press is tracked from the first event;
             // whether it was a click or a drag is decided on release.
@@ -91,7 +134,7 @@ struct AvatarHost: View {
                             // Recorded before the popover opens, so the sprite
                             // starts reacting on the same frame the panel does.
                             ui.clickedAt = Date().timeIntervalSinceReferenceDate
-                            onClick()
+                            onClick(nil)
                         }
                     }
             )
@@ -103,6 +146,8 @@ struct AvatarHost: View {
     private var input: AvatarInput {
         var input = store.avatarInput
         input.clickedAt = ui.clickedAt
+        input.selectedRing = ui.selectedRing
+        input.notchEdge = settings.notchEdge
         return input
     }
 
@@ -124,7 +169,9 @@ struct AvatarHost: View {
         if let age = store.newestAge, age >= Snapshot.Liveness.live {
             lines.append("Last update \(Fmt.age(age)) ago")
         }
-        lines.append("Click for details · drag to move")
+        lines.append(settings.styleID.isDocked
+                     ? "Click a ring for details"
+                     : "Click for details · drag to move")
         return lines.joined(separator: "\n")
     }
 }

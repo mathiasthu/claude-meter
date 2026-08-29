@@ -14,6 +14,10 @@ enum AvatarStyleID: String, CaseIterable, Identifiable {
     case blobCreature
     case face
     case pill
+    /// Appended last rather than filed beside the other instrument-ish style:
+    /// this order is the picker grid and the row order on the state sheet, so
+    /// appending adds a fifth row instead of reshuffling four.
+    case sideNotch
 
     var id: String { rawValue }
 
@@ -23,6 +27,7 @@ enum AvatarStyleID: String, CaseIterable, Identifiable {
         case .pill:          return "Pill"
         case .pixelCreature: return "Creature · pixel"
         case .blobCreature:  return "Creature · blob"
+        case .sideNotch:     return "Side notch"
         }
     }
 
@@ -36,6 +41,8 @@ enum AvatarStyleID: String, CaseIterable, Identifiable {
             return "A blocky quadruped whose stance carries the state. Looks native next to a monospace prompt."
         case .blobCreature:
             return "The soft-bodied original. Same pose grammar: it works, sweats, panics and sleeps."
+        case .sideNotch:
+            return "An instrument, not a character. Docks flush to a screen edge with all three readings live."
         }
     }
 
@@ -47,14 +54,56 @@ enum AvatarStyleID: String, CaseIterable, Identifiable {
         case .pill:          return CGSize(width: 128, height: 30)
         case .pixelCreature: return CGSize(width: 48, height: 48)
         case .blobCreature:  return CGSize(width: 48, height: 48)
+        case .sideNotch:     return NotchMetrics.naturalSize
         }
     }
 
     /// True for styles that take the user's scale as a multiplier on their own
-    /// metrics instead of being magnified after the fact. Only the pill, which
-    /// is type: magnifying rendered text resamples it and goes soft, while
-    /// magnifying artwork on a pixel grid is exactly what you want.
-    var scalesItself: Bool { self == .pill }
+    /// metrics instead of being magnified after the fact. The two that are type
+    /// rather than artwork: magnifying rendered text resamples it and goes
+    /// soft, while magnifying artwork on a pixel grid is exactly what you want.
+    var scalesItself: Bool { self == .pill || self == .sideNotch }
+
+    /// True for a style that lives flush against a screen edge instead of
+    /// floating wherever it was dropped. The panel's only branch point — it
+    /// decides placement, whether the position is saved, and whether
+    /// click-through applies.
+    var isDocked: Bool { self == .sideNotch }
+
+    /// True for a style that paints its own plate and its own edge, so the
+    /// wrapper must not add a silhouette shadow underneath it.
+    var drawsOwnShadow: Bool { self == .sideNotch }
+
+    /// What the scale slider is allowed to offer. The notch is 344 pt tall
+    /// before any multiplier; four times that is taller than most displays.
+    var scaleRange: ClosedRange<Double> {
+        isDocked ? 0.75...1.5 : 0.5...4.0
+    }
+
+    /// The user's saved scale, brought inside what this style can survive.
+    ///
+    /// Every read of `settings.scale` goes through this, and the stored value
+    /// is never rewritten to match: switching to the notch and back must give
+    /// the creature its 1.75 again rather than the 1.5 the notch could take.
+    func clampScale(_ s: Double) -> Double {
+        min(max(s, scaleRange.lowerBound), scaleRange.upperBound)
+    }
+
+    /// Height of this style's half of the settings preview.
+    var previewHeight: CGFloat { isDocked ? 260 : 104 }
+
+    /// Scale for the 48 pt tile in the picker grid.
+    var thumbScale: CGFloat { isDocked ? 0.13 : 0.62 }
+
+    /// Height of one cell on the state sheet, and the shrink applied to the
+    /// artwork inside it. A 344 pt strip does not fit a 68 pt cell, and a
+    /// 68 pt cell is what four styles were reviewed in.
+    var sheetCellHeight: CGFloat { isDocked ? 190 : 68 }
+
+    /// A magnification, not a metric multiplier: the sheet is reviewed for
+    /// design, so it wants a faithful miniature of the real thing rather than
+    /// the strip redrawn with 5 pt type.
+    var sheetScale: CGFloat { isDocked ? 0.42 : 1 }
 
     @ViewBuilder
     func view(_ input: AvatarInput, scale: CGFloat = 1) -> some View {
@@ -63,6 +112,11 @@ enum AvatarStyleID: String, CaseIterable, Identifiable {
         case .pill:          PillAvatar(input: input, scale: scale)
         case .pixelCreature: PixelCreatureAvatar(input: input)
         case .blobCreature:  BlobCreatureAvatar(input: input)
+        // Display-only: no gestures and no closures, because this is also what
+        // the thumbnail, the preview and the sheet render. The tap targets that
+        // make it interactive are composed over it in `AvatarHost`, where there
+        // is an object that can remember which ring was hit.
+        case .sideNotch:     NotchStrip(input: input, scale: scale)
         }
     }
 }
@@ -215,11 +269,18 @@ struct ScaledAvatar: View {
                 // Without a plate behind it the art has to hold its own edge
                 // against pale wallpaper. A shadow follows the silhouette,
                 // which is the whole reason it beats a card.
-                .shadow(color: .black.opacity(input.showsBackground ? 0 : 0.45),
+                .shadow(color: .black.opacity(shadowOpacity),
                         radius: 2.5 * (magnifies ? 1 : scale), x: 0, y: magnifies ? 1 : scale)
                 .scaleEffect(magnifies ? scale : 1)
         }
         .opacity(opacity)
         .fixedSize()
+    }
+
+    /// A style that paints its own edge gets no shadow: the notch already has
+    /// a hairline, and a silhouette shadow under a 344 pt slab reads as a smear
+    /// rather than as separation.
+    private var shadowOpacity: Double {
+        style.drawsOwnShadow || input.showsBackground ? 0 : 0.45
     }
 }

@@ -223,7 +223,7 @@ struct PreviewStrip: View {
                 half(.light)
                 half(.dark)
             }
-            .frame(height: 104)
+            .frame(height: settings.styleID.previewHeight)
 
             VStack(spacing: 7) {
                 // The track is coloured to the *edited* boundaries, so moving a
@@ -289,11 +289,21 @@ struct PreviewStrip: View {
                 startPoint: .topLeading, endPoint: .bottomTrailing)
             ScaledAvatar(style: settings.styleID,
                          input: Self.input(settings: settings, ui: ui),
-                         scale: settings.scale,
+                         scale: previewScale,
                          opacity: settings.opacity)
         }
         .environment(\.colorScheme, scheme)
         .frame(maxWidth: .infinity)
+    }
+
+    /// The user's scale, brought inside both what the style can take and what
+    /// the preview box can show. The second term only ever bites on the notch:
+    /// at 344 pt it is taller than its own preview even at 100%, and a preview
+    /// that clips the thing being previewed is worse than one that shrinks it.
+    private var previewScale: Double {
+        let style = settings.styleID
+        let fits = style.previewHeight / style.naturalSize.height
+        return min(style.clampScale(settings.scale), fits)
     }
 
     /// A synthetic snapshot for the preview. Real data cannot be asked to be
@@ -311,7 +321,11 @@ struct PreviewStrip: View {
             sessions: [pct],
             age: 12,
             motionAllowed: settings.motionAllowed,
-            criticalBlinkSeconds: settings.criticalBlinkSeconds)
+            criticalBlinkSeconds: settings.criticalBlinkSeconds,
+            // The preview's whole job is to answer "what do my thresholds look
+            // like", so it hands the styles the boundaries the sliders are on
+            // right now rather than letting them find the saved ones.
+            thresholds: settings.thresholds)
 
         switch ui.forced {
         case .none:   break
@@ -341,7 +355,8 @@ struct AvatarPane: View {
                 ForEach(AvatarStyleID.allCases) { style in
                     Button { settings.styleID = style } label: {
                         VStack(spacing: 5) {
-                            ScaledAvatar(style: style, input: thumbInput, scale: 0.62)
+                            ScaledAvatar(style: style, input: thumbInput,
+                                         scale: style.thumbScale)
                                 .frame(height: 48)
                             Text(style.displayName)
                                 .font(Typo.ui(11, .medium))
@@ -362,10 +377,13 @@ struct AvatarPane: View {
             }
 
             SettingsCard {
-                SettingRow("Scale") {
+                SettingRow("Scale", note: settings.styleID.isDocked
+                           ? "The notch takes a narrower range. Your creature's scale is kept."
+                           : nil) {
                     HStack {
-                        Slider(value: $settings.scale, in: 0.5...4.0).frame(width: 130)
-                        Text("\(Int(settings.scale * 100))%")
+                        Slider(value: effectiveScale,
+                               in: settings.styleID.scaleRange).frame(width: 130)
+                        Text("\(Int(settings.styleID.clampScale(settings.scale) * 100))%")
                             .font(Typo.mono(11)).foregroundStyle(.secondary)
                             .frame(width: 42, alignment: .trailing)
                     }
@@ -401,15 +419,71 @@ struct AvatarPane: View {
                 }
                 Divider()
                 SettingRow("Ignore mouse clicks",
-                           note: "Clicks pass through to whatever is underneath.") {
+                           note: settings.styleID.isDocked
+                           ? "Not available for docked styles."
+                           : "Clicks pass through to whatever is underneath.") {
                     Toggle("", isOn: $settings.ignoreMouse).labelsHidden()
+                        .disabled(settings.styleID.isDocked)
                 }
                 Divider()
                 SettingRow("Float over full-screen apps") {
                     Toggle("", isOn: $settings.floatOverFullScreen).labelsHidden()
                 }
             }
+
+            // Only meaningful for a style that has an edge to be docked to, so
+            // the card is not there at all otherwise — a disabled row would
+            // still be a row asking to be understood.
+            if settings.styleID.isDocked {
+                SectionLabel("Side notch")
+                SettingsCard {
+                    SettingRow("Docked edge") {
+                        Picker("", selection: $settings.notchEdge) {
+                            ForEach(NotchEdge.allCases) { Text($0.label).tag($0) }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 130)
+                    }
+                    Divider()
+                    SettingRow("Display",
+                               note: "Automatic follows whichever display is current.") {
+                        Picker("", selection: $settings.notchScreenID) {
+                            Text("Automatic").tag(UInt32(0))
+                            // Listed by display id, not by index: unplugging a
+                            // monitor renumbers the indices and would silently
+                            // move the strip to a different screen.
+                            ForEach(NSScreen.screens, id: \.displayID) { screen in
+                                Text(screen.localizedName).tag(screen.displayID)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 180)
+                    }
+                    Divider()
+                    SettingRow("Size",
+                               note: "Fixed at 76 x 344 pt before scale. The notch does not "
+                                   + "grow with the sprite — it is an instrument, not a character.") {
+                        EmptyView()
+                    }
+                }
+            }
         }
+    }
+
+    /// The slider's value, read through the style's clamp and written straight
+    /// back.
+    ///
+    /// A plain `$settings.scale` would hand a 1.75 to a slider whose range now
+    /// stops at 1.5, and a control asked to display a value it cannot represent
+    /// is entitled to write the nearest one it can — which would quietly spend
+    /// the creature's scale on a visit to the notch. Reading through the clamp
+    /// means the thumb is always inside the track, so there is nothing for the
+    /// slider to correct; the setter is unfiltered, because a drag *is* the
+    /// user changing the number.
+    private var effectiveScale: Binding<Double> {
+        Binding(get: { settings.styleID.clampScale(settings.scale) },
+                set: { settings.scale = $0 })
     }
 
     /// Thumbnails all show the same mid-escalation state so styles are

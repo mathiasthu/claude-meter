@@ -101,7 +101,12 @@ struct PillAvatar: View {
     /// Up to three sessions, ascending severity. The worst is drawn last, so
     /// it sits on top of the fan and closest to the numbers.
     private var stackColors: [Color] {
-        let t = SettingsStore.shared.thresholds
+        // Off the input, not `SettingsStore.shared`: the settings preview and
+        // the offscreen renderers build an input the saved settings had no part
+        // in, and this was the one place a style went behind their backs to ask
+        // the real thresholds — so the preview's fan stayed at the saved
+        // boundaries while its own slider moved.
+        let t = input.thresholds
         return input.sessions
             .compactMap { $0 }
             .sorted(by: >)
