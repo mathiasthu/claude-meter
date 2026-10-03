@@ -273,7 +273,7 @@ fi
 # ---------------------------------------------------------------- HUD line --
 
 # Tab-separated so empty fields survive the split. "-" marks absent.
-IFS=$'\t' read -r f_pct f_reset s_pct s_reset c_pct c_tok c_size cost_usd <<EOF
+IFS=$'\t' read -r f_pct f_reset s_pct s_reset c_pct c_tok c_size <<EOF
 $(printf '%s' "$snapshot" | "$JQ" -r '
   def d: if . == null then "-" else tostring end;
   [ (.rate_limits.five_hour.used_percentage  | d),
@@ -282,9 +282,18 @@ $(printf '%s' "$snapshot" | "$JQ" -r '
     (.rate_limits.seven_day.resets_at        | d),
     (.context.used_percentage                | d),
     (.context.total_input_tokens             | d),
-    (.context.size                           | d),
-    (.cost.total_cost_usd                    | d)
+    (.context.size                           | d)
   ] | @tsv' 2>/dev/null)
+EOF
+
+# Prompt-cache state comes from the raw payload rather than the snapshot, so the
+# snapshot schema the app decodes is untouched. "-" marks absent (older Claude
+# Code builds, or no caching observed yet).
+IFS=$'\t' read -r k_warm k_exp <<EOF
+$(printf '%s' "$input" | "$JQ" -r '
+  def d: if . == null then "-" else tostring end;
+  [ (.prompt_cache | if . == null or .caching_observed != true then null else .warm end | d),
+    (.prompt_cache.expires_at | d) ] | @tsv' 2>/dev/null)
 EOF
 
 # The secondary segments -- countdown, token pair, cost, and the "-" shown for a
@@ -357,12 +366,12 @@ else
   seg="${seg}   ${MUTED}ctx —${RST}"
 fi
 
-if [ "$cost_usd" != "-" ]; then
-  # Captured before use: the old `printf || printf '0.00'` fallback appended a
-  # second number when the first one failed, printing "$0.008.34" rather than
-  # nothing. A cost that will not parse is dropped instead.
-  money=$(printf '%.2f' "$cost_usd" 2>/dev/null) || money=""
-  [ -n "$money" ] && seg="${seg}   ${MUTED}\$${money}${RST}"
+if [ "$k_warm" = "true" ]; then
+  left=$(countdown "$k_exp")
+  seg="${seg}   ${GRN}cache warm${RST}"
+  [ -n "$left" ] && seg="${seg} ${MUTED}${left}${RST}"
+elif [ "$k_warm" = "false" ]; then
+  seg="${seg}   ${YLW}cache cold${RST}"
 fi
 
 printf '%s\n' "$seg"

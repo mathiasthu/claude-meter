@@ -66,6 +66,16 @@ Verified against real payloads, not synthetic ones:
   is not part of `selftest.sh` — nothing in the committed tests would catch a
   regression there.
 
+## 2026-10-03: status line text
+
+The HUD line prints again (it was silenced on 2026-10-02) and now ends with
+`cache warm 59m` / `cache cold`, read from the raw payload's `prompt_cache`
+(`warm`, `expires_at`; shown only when `caching_observed`). The `$` cost segment
+was removed at Mathias's request. The snapshot schema is unchanged, so the app
+is unaffected. Checked by piping the real `last-raw.json` through the collector
+(warm, future expiry, cold, no `prompt_cache`) with `CLAUDE_METER_STATE` pointed
+at a temp dir; `selftest.sh` was not rerun.
+
 ## The installer only ever worked here
 
 An audit of what stands between this and someone else using it came back with
